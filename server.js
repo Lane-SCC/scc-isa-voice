@@ -5,8 +5,13 @@ const app = express();
 // Twilio posts x-www-form-urlencoded by default
 app.use(express.urlencoded({ extended: false }));
 
-// Optional health check
+// Health check
 app.get("/", (req, res) => res.status(200).send("OK"));
+
+// Version stamp (helps confirm which deploy is live)
+app.get("/version", (req, res) =>
+  res.status(200).send("scc-isa-voice v0.1 menu+redirect+placeholders")
+);
 
 // Incoming call handler (Twilio hits this URL)
 app.post("/voice", (req, res) => {
@@ -15,7 +20,7 @@ app.post("/voice", (req, res) => {
 
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Gather numDigits="1" action="${baseUrl}/menu" method="POST">
+  <Gather numDigits="1" timeout="6" action="${baseUrl}/menu" method="POST">
     <Say voice="alice">
       Welcome to SCC ISA training.
       Press 1 for M1 scenario.
