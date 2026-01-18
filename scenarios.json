@@ -1,0 +1,144 @@
+{
+  "mcd": {
+    "Standard": [
+      {
+        "id": "MCD-S-01",
+        "borrowerName": "Steve",
+        "borrowerGender": "male",
+        "summary": "Borrower clicked an ad and is curious. They are friendly but vague and have not stated whether this is a purchase or refinance.",
+        "objective": "ISA must explicitly establish intent before any application request."
+      },
+      {
+        "id": "MCD-S-02",
+        "borrowerName": "Sarah",
+        "borrowerGender": "female",
+        "summary": "Borrower says they are just looking and comparing options without committing.",
+        "objective": "ISA must avoid assuming intent and ask direct clarification questions."
+      },
+      {
+        "id": "MCD-S-03",
+        "borrowerName": "Mike",
+        "borrowerGender": "male",
+        "summary": "Borrower is researching online and unsure what they want yet.",
+        "objective": "ISA must classify intent correctly or leave it unclassified without pressure."
+      }
+    ],
+    "Moderate": [
+      {
+        "id": "MCD-M-01",
+        "borrowerName": "Jessica",
+        "borrowerGender": "female",
+        "summary": "Borrower is distracted and rushed, giving short answers.",
+        "objective": "ISA must slow the call and obtain explicit intent."
+      },
+      {
+        "id": "MCD-M-02",
+        "borrowerName": "Steve",
+        "borrowerGender": "male",
+        "summary": "Borrower mentions moving but gives unclear timing.",
+        "objective": "ISA must clarify whether real purchase intent exists."
+      },
+      {
+        "id": "MCD-M-03",
+        "borrowerName": "Sarah",
+        "borrowerGender": "female",
+        "summary": "Borrower talks about payments without stating loan purpose.",
+        "objective": "ISA must separate curiosity from intent and avoid LO-only answers."
+      }
+    ],
+    "Edge": [
+      {
+        "id": "MCD-E-01",
+        "borrowerName": "Mike",
+        "borrowerGender": "male",
+        "summary": "Borrower is anxious about credit and already spoke to another lender.",
+        "objective": "ISA must validate concern and still establish intent."
+      },
+      {
+        "id": "MCD-E-02",
+        "borrowerName": "Jessica",
+        "borrowerGender": "female",
+        "summary": "Borrower challenges why questions are necessary.",
+        "objective": "ISA must maintain control and not bypass intent discovery."
+      },
+      {
+        "id": "MCD-E-03",
+        "borrowerName": "Steve",
+        "borrowerGender": "male",
+        "summary": "Borrower gives conflicting purchase versus refinance information.",
+        "objective": "ISA must resolve ambiguity or hold state correctly."
+      }
+    ]
+  },
+  "m1": {
+    "Standard": [
+      {
+        "id": "M1-S-01",
+        "borrowerName": "Sarah",
+        "borrowerGender": "female",
+        "summary": "Borrower clearly wants to move forward and get pre-approved.",
+        "objective": "ISA must obtain explicit agreement to application or LO conversation."
+      },
+      {
+        "id": "M1-S-02",
+        "borrowerName": "Steve",
+        "borrowerGender": "male",
+        "summary": "Borrower agrees to proceed but asks what happens next.",
+        "objective": "ISA must explain next steps and confirm M1."
+      },
+      {
+        "id": "M1-S-03",
+        "borrowerName": "Jessica",
+        "borrowerGender": "female",
+        "summary": "Borrower is cooperative and ready to start.",
+        "objective": "ISA must complete M1 cleanly without pressure."
+      }
+    ],
+    "Moderate": [
+      {
+        "id": "M1-M-01",
+        "borrowerName": "Mike",
+        "borrowerGender": "male",
+        "summary": "Borrower hesitates due to credit concerns.",
+        "objective": "ISA must handle credit fear correctly and seek M1."
+      },
+      {
+        "id": "M1-M-02",
+        "borrowerName": "Sarah",
+        "borrowerGender": "female",
+        "summary": "Borrower wants rates before committing.",
+        "objective": "ISA must defer LO-only questions and avoid handoff."
+      },
+      {
+        "id": "M1-M-03",
+        "borrowerName": "Steve",
+        "borrowerGender": "male",
+        "summary": "Borrower says yes but sounds uncertain.",
+        "objective": "ISA must confirm real agreement, not tone."
+      }
+    ],
+    "Edge": [
+      {
+        "id": "M1-E-01",
+        "borrowerName": "Jessica",
+        "borrowerGender": "female",
+        "summary": "Borrower demands numbers before agreeing.",
+        "objective": "ISA must defer LO-only questions and protect LO."
+      },
+      {
+        "id": "M1-E-02",
+        "borrowerName": "Mike",
+        "borrowerGender": "male",
+        "summary": "Borrower insists on speaking with LO immediately.",
+        "objective": "ISA must avoid unauthorized LO handoff."
+      },
+      {
+        "id": "M1-E-03",
+        "borrowerName": "Sarah",
+        "borrowerGender": "female",
+        "summary": "Borrower verbally agrees but refuses application.",
+        "objective": "ISA must record non-consent and avoid false M1."
+      }
+    ]
+  }
+}
