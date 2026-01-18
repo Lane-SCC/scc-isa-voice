@@ -1,4 +1,7 @@
 const express = require("express");
+const fs = require("fs");
+const path = require("path");
+
 const app = express();
 
 // Twilio posts x-www-form-urlencoded by default
@@ -8,6 +11,7 @@ app.use(express.urlencoded({ extended: false }));
 // Config
 // ====================
 const TTS_VOICE = "Google.en-US-Chirp3-HD-Aoede";
+const SCENARIOS_PATH = path.join(__dirname, "scenarios.json");
 
 // ====================
 // Logging helpers
@@ -41,7 +45,6 @@ function xmlEscape(str = "") {
 }
 
 // Force acronyms like ISA to be spoken as letters.
-// We do this AFTER escaping, because we inject SSML tags.
 function injectAcronyms(escapedText) {
   return escapedText.replace(
     /\bISA\b/g,
@@ -56,173 +59,44 @@ function saySsml(text) {
 }
 
 // ====================
-// Scenario Definitions (Expanded + Borrower Identity)
-// Controlled name set: 2 male, 2 female
+// Load scenarios.json (governed content store)
 // ====================
-const SCENARIOS = {
-  mcd: {
-    Standard: [
-      {
-        id: "MCD-S-01",
-        borrowerName: "Steve",
-        borrowerGender: "male",
-        summary:
-          "Borrower clicked an ad and is curious. They are friendly but vague and have not stated whether this is a purchase or refinance.",
-        objective:
-          "ISA must explicitly establish intent before any application request.",
-      },
-      {
-        id: "MCD-S-02",
-        borrowerName: "Sarah",
-        borrowerGender: "female",
-        summary:
-          "Borrower says they are just looking and comparing options without committing.",
-        objective:
-          "ISA must avoid assuming intent and ask direct clarification questions.",
-      },
-      {
-        id: "MCD-S-03",
-        borrowerName: "Mike",
-        borrowerGender: "male",
-        summary:
-          "Borrower is researching online and unsure what they want yet.",
-        objective:
-          "ISA must classify intent correctly or leave it unclassified without pressure.",
-      },
-    ],
-    Moderate: [
-      {
-        id: "MCD-M-01",
-        borrowerName: "Jessica",
-        borrowerGender: "female",
-        summary: "Borrower is distracted and rushed, giving short answers.",
-        objective: "ISA must slow the call and obtain explicit intent.",
-      },
-      {
-        id: "MCD-M-02",
-        borrowerName: "Steve",
-        borrowerGender: "male",
-        summary: "Borrower mentions moving but gives unclear timing.",
-        objective: "ISA must clarify whether real purchase intent exists.",
-      },
-      {
-        id: "MCD-M-03",
-        borrowerName: "Sarah",
-        borrowerGender: "female",
-        summary:
-          "Borrower talks about payments without stating loan purpose.",
-        objective:
-          "ISA must separate curiosity from intent and avoid LO-only answers.",
-      },
-    ],
-    Edge: [
-      {
-        id: "MCD-E-01",
-        borrowerName: "Mike",
-        borrowerGender: "male",
-        summary:
-          "Borrower is anxious about credit and already spoke to another lender.",
-        objective:
-          "ISA must validate concern and still establish intent.",
-      },
-      {
-        id: "MCD-E-02",
-        borrowerName: "Jessica",
-        borrowerGender: "female",
-        summary: "Borrower challenges why questions are necessary.",
-        objective:
-          "ISA must maintain control and not bypass intent discovery.",
-      },
-      {
-        id: "MCD-E-03",
-        borrowerName: "Steve",
-        borrowerGender: "male",
-        summary:
-          "Borrower gives conflicting purchase versus refinance information.",
-        objective:
-          "ISA must resolve ambiguity or hold state correctly.",
-      },
-    ],
-  },
+function loadScenarios() {
+  try {
+    const raw = fs.readFileSync(SCENARIOS_PATH, "utf8");
+    const data = JSON.parse(raw);
 
-  m1: {
-    Standard: [
-      {
-        id: "M1-S-01",
-        borrowerName: "Sarah",
-        borrowerGender: "female",
-        summary:
-          "Borrower clearly wants to move forward and get pre-approved.",
-        objective:
-          "ISA must obtain explicit agreement to application or LO conversation.",
-      },
-      {
-        id: "M1-S-02",
-        borrowerName: "Steve",
-        borrowerGender: "male",
-        summary: "Borrower agrees to proceed but asks what happens next.",
-        objective: "ISA must explain next steps and confirm M1.",
-      },
-      {
-        id: "M1-S-03",
-        borrowerName: "Jessica",
-        borrowerGender: "female",
-        summary: "Borrower is cooperative and ready to start.",
-        objective: "ISA must complete M1 cleanly without pressure.",
-      },
-    ],
-    Moderate: [
-      {
-        id: "M1-M-01",
-        borrowerName: "Mike",
-        borrowerGender: "male",
-        summary: "Borrower hesitates due to credit concerns.",
-        objective: "ISA must handle credit fear correctly and seek M1.",
-      },
-      {
-        id: "M1-M-02",
-        borrowerName: "Sarah",
-        borrowerGender: "female",
-        summary: "Borrower wants rates before committing.",
-        objective:
-          "ISA must defer LO-only questions and avoid handoff.",
-      },
-      {
-        id: "M1-M-03",
-        borrowerName: "Steve",
-        borrowerGender: "male",
-        summary: "Borrower says yes but sounds uncertain.",
-        objective: "ISA must confirm real agreement, not tone.",
-      },
-    ],
-    Edge: [
-      {
-        id: "M1-E-01",
-        borrowerName: "Jessica",
-        borrowerGender: "female",
-        summary: "Borrower demands numbers before agreeing.",
-        objective:
-          "ISA must defer LO-only questions and protect LO.",
-      },
-      {
-        id: "M1-E-02",
-        borrowerName: "Mike",
-        borrowerGender: "male",
-        summary: "Borrower insists on speaking with LO immediately.",
-        objective:
-          "ISA must avoid unauthorized LO handoff.",
-      },
-      {
-        id: "M1-E-03",
-        borrowerName: "Sarah",
-        borrowerGender: "female",
-        summary: "Borrower verbally agrees but refuses application.",
-        objective:
-          "ISA must record non-consent and avoid false M1.",
-      },
-    ],
-  },
-};
+    // Minimal shape check (don’t over-engineer)
+    if (!data?.mcd || !data?.m1) {
+      throw new Error("scenarios.json missing required top-level keys: mcd, m1");
+    }
+
+    console.log(
+      JSON.stringify({
+        event: "SCENARIOS_LOADED",
+        path: SCENARIOS_PATH,
+      })
+    );
+
+    return data;
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        event: "SCENARIOS_LOAD_FAILED",
+        path: SCENARIOS_PATH,
+        error: String(err?.message || err),
+      })
+    );
+
+    // Fail-safe: empty buckets so app still runs and you see the error clearly
+    return {
+      mcd: { Standard: [], Moderate: [], Edge: [] },
+      m1: { Standard: [], Moderate: [], Edge: [] },
+    };
+  }
+}
+
+let SCENARIOS = loadScenarios();
 
 // No-immediate-repeat memory (per mode+difficulty). Resets on deploy/restart.
 const lastScenarioByKey = {};
@@ -252,11 +126,30 @@ function pickScenarioNoRepeat(mode, difficulty) {
 // ====================
 // Health + Version
 // ====================
-app.get("/", (req, res) => res.send("OK"));
+app.get("/", (req, res) => res.status(200).send("OK"));
 
 app.get("/version", (req, res) =>
-  res.send("scc-isa-voice v0.8 borrower-names + no-repeat + SSML ISA")
+  res
+    .status(200)
+    .send("scc-isa-voice v0.9 scenarios.json + no-repeat + SSML ISA + borrower greeting")
 );
+
+// Optional: quick sanity check that scenarios are present
+app.get("/scenarios/status", (req, res) => {
+  const counts = {
+    mcd: {
+      Standard: SCENARIOS?.mcd?.Standard?.length || 0,
+      Moderate: SCENARIOS?.mcd?.Moderate?.length || 0,
+      Edge: SCENARIOS?.mcd?.Edge?.length || 0,
+    },
+    m1: {
+      Standard: SCENARIOS?.m1?.Standard?.length || 0,
+      Moderate: SCENARIOS?.m1?.Moderate?.length || 0,
+      Edge: SCENARIOS?.m1?.Edge?.length || 0,
+    },
+  };
+  res.status(200).json(counts);
+});
 
 // ====================
 // Call Entry
@@ -352,7 +245,7 @@ app.post("/difficulty", (req, res) => {
 });
 
 app.post("/scenario", (req, res) => {
-  const mode = req.query.mode;
+  const mode = req.query.mode; // "mcd" or "m1"
   const digit = req.body?.Digits;
 
   const difficulty =
@@ -364,6 +257,15 @@ app.post("/scenario", (req, res) => {
       ? "Edge"
       : null;
 
+  if (!mode || (mode !== "mcd" && mode !== "m1")) {
+    logEvent("SCENARIO_INVALID_MODE", req, { mode });
+    return res.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  ${saySsml("Invalid mode. Goodbye.")}
+  <Hangup/>
+</Response>`);
+  }
+
   if (!difficulty) {
     logEvent("SCENARIO_INVALID_DIFFICULTY", req, { mode, digit });
     return res.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
@@ -372,6 +274,10 @@ app.post("/scenario", (req, res) => {
   <Hangup/>
 </Response>`);
   }
+
+  // (Optional) Reload on each scenario request if you want “hot edits” without redeploy.
+  // Commented out to keep behavior stable.
+  // SCENARIOS = loadScenarios();
 
   const scenario = pickScenarioNoRepeat(mode, difficulty);
 
@@ -383,9 +289,17 @@ app.post("/scenario", (req, res) => {
     borrowerGender: scenario?.borrowerGender || null,
   });
 
-  const summary = scenario?.summary || "Scenario unavailable.";
-  const objective = scenario?.objective || "Objective unavailable.";
-  const borrowerName = scenario?.borrowerName || "Borrower";
+  if (!scenario) {
+    return res.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  ${saySsml("No scenarios found for this selection. Please contact the administrator.")}
+  <Hangup/>
+</Response>`);
+  }
+
+  const summary = scenario.summary || "Scenario unavailable.";
+  const objective = scenario.objective || "Objective unavailable.";
+  const borrowerName = scenario.borrowerName || "Borrower";
 
   // Narrator gives brief + objective, then borrower answers by name, then pause for training.
   res.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
