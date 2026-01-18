@@ -43,8 +43,10 @@ function xmlEscape(str = "") {
 // Force acronyms like ISA to be spoken as letters.
 // We do this AFTER escaping, because we inject SSML tags.
 function injectAcronyms(escapedText) {
-  // Replace whole-word ISA with SSML character spelling
-  return escapedText.replace(/\bISA\b/g, `<say-as interpret-as="characters">ISA</say-as>`);
+  return escapedText.replace(
+    /\bISA\b/g,
+    `<say-as interpret-as="characters">ISA</say-as>`
+  );
 }
 
 function saySsml(text) {
@@ -54,13 +56,16 @@ function saySsml(text) {
 }
 
 // ====================
-// Scenario Definitions (Expanded)
+// Scenario Definitions (Expanded + Borrower Identity)
+// Controlled name set: 2 male, 2 female
 // ====================
 const SCENARIOS = {
   mcd: {
     Standard: [
       {
         id: "MCD-S-01",
+        borrowerName: "Steve",
+        borrowerGender: "male",
         summary:
           "Borrower clicked an ad and is curious. They are friendly but vague and have not stated whether this is a purchase or refinance.",
         objective:
@@ -68,6 +73,8 @@ const SCENARIOS = {
       },
       {
         id: "MCD-S-02",
+        borrowerName: "Sarah",
+        borrowerGender: "female",
         summary:
           "Borrower says they are just looking and comparing options without committing.",
         objective:
@@ -75,6 +82,8 @@ const SCENARIOS = {
       },
       {
         id: "MCD-S-03",
+        borrowerName: "Mike",
+        borrowerGender: "male",
         summary:
           "Borrower is researching online and unsure what they want yet.",
         objective:
@@ -84,16 +93,22 @@ const SCENARIOS = {
     Moderate: [
       {
         id: "MCD-M-01",
+        borrowerName: "Jessica",
+        borrowerGender: "female",
         summary: "Borrower is distracted and rushed, giving short answers.",
         objective: "ISA must slow the call and obtain explicit intent.",
       },
       {
         id: "MCD-M-02",
+        borrowerName: "Steve",
+        borrowerGender: "male",
         summary: "Borrower mentions moving but gives unclear timing.",
         objective: "ISA must clarify whether real purchase intent exists.",
       },
       {
         id: "MCD-M-03",
+        borrowerName: "Sarah",
+        borrowerGender: "female",
         summary:
           "Borrower talks about payments without stating loan purpose.",
         objective:
@@ -103,6 +118,8 @@ const SCENARIOS = {
     Edge: [
       {
         id: "MCD-E-01",
+        borrowerName: "Mike",
+        borrowerGender: "male",
         summary:
           "Borrower is anxious about credit and already spoke to another lender.",
         objective:
@@ -110,15 +127,18 @@ const SCENARIOS = {
       },
       {
         id: "MCD-E-02",
-        summary:
-          "Borrower challenges why questions are necessary.",
+        borrowerName: "Jessica",
+        borrowerGender: "female",
+        summary: "Borrower challenges why questions are necessary.",
         objective:
           "ISA must maintain control and not bypass intent discovery.",
       },
       {
         id: "MCD-E-03",
+        borrowerName: "Steve",
+        borrowerGender: "male",
         summary:
-          "Borrower gives conflicting purchase vs refinance information.",
+          "Borrower gives conflicting purchase versus refinance information.",
         objective:
           "ISA must resolve ambiguity or hold state correctly.",
       },
@@ -129,6 +149,8 @@ const SCENARIOS = {
     Standard: [
       {
         id: "M1-S-01",
+        borrowerName: "Sarah",
+        borrowerGender: "female",
         summary:
           "Borrower clearly wants to move forward and get pre-approved.",
         objective:
@@ -136,61 +158,65 @@ const SCENARIOS = {
       },
       {
         id: "M1-S-02",
-        summary:
-          "Borrower agrees to proceed but asks what happens next.",
-        objective:
-          "ISA must explain next steps and confirm M1.",
+        borrowerName: "Steve",
+        borrowerGender: "male",
+        summary: "Borrower agrees to proceed but asks what happens next.",
+        objective: "ISA must explain next steps and confirm M1.",
       },
       {
         id: "M1-S-03",
-        summary:
-          "Borrower is cooperative and ready to start.",
-        objective:
-          "ISA must complete M1 cleanly without pressure.",
+        borrowerName: "Jessica",
+        borrowerGender: "female",
+        summary: "Borrower is cooperative and ready to start.",
+        objective: "ISA must complete M1 cleanly without pressure.",
       },
     ],
     Moderate: [
       {
         id: "M1-M-01",
-        summary:
-          "Borrower hesitates due to credit concerns.",
-        objective:
-          "ISA must handle credit fear correctly and seek M1.",
+        borrowerName: "Mike",
+        borrowerGender: "male",
+        summary: "Borrower hesitates due to credit concerns.",
+        objective: "ISA must handle credit fear correctly and seek M1.",
       },
       {
         id: "M1-M-02",
-        summary:
-          "Borrower wants rates before committing.",
+        borrowerName: "Sarah",
+        borrowerGender: "female",
+        summary: "Borrower wants rates before committing.",
         objective:
           "ISA must defer LO-only questions and avoid handoff.",
       },
       {
         id: "M1-M-03",
-        summary:
-          "Borrower says yes but sounds uncertain.",
-        objective:
-          "ISA must confirm real agreement, not tone.",
+        borrowerName: "Steve",
+        borrowerGender: "male",
+        summary: "Borrower says yes but sounds uncertain.",
+        objective: "ISA must confirm real agreement, not tone.",
       },
     ],
     Edge: [
       {
         id: "M1-E-01",
-        summary:
-          "Borrower demands numbers before agreeing.",
+        borrowerName: "Jessica",
+        borrowerGender: "female",
+        summary: "Borrower demands numbers before agreeing.",
         objective:
           "ISA must defer LO-only questions and protect LO.",
       },
       {
         id: "M1-E-02",
-        summary:
-          "Borrower insists on speaking with LO immediately.",
+        borrowerName: "Mike",
+        borrowerGender: "male",
+        summary: "Borrower insists on speaking with LO immediately.",
         objective:
           "ISA must avoid unauthorized LO handoff.",
       },
       {
         id: "M1-E-03",
-        summary:
-          "Borrower verbally agrees but refuses application.",
+        borrowerName: "Sarah",
+        borrowerGender: "female",
+        summary: "Borrower verbally agrees but refuses application.",
         objective:
           "ISA must record non-consent and avoid false M1.",
       },
@@ -209,7 +235,6 @@ function pickScenarioNoRepeat(mode, difficulty) {
   const key = `${mode}:${difficulty}`;
   const lastId = lastScenarioByKey[key];
 
-  // Try a few times to avoid repeating the last one.
   let choice = null;
   for (let i = 0; i < 6; i++) {
     const candidate = bucket[Math.floor(Math.random() * bucket.length)];
@@ -230,7 +255,7 @@ function pickScenarioNoRepeat(mode, difficulty) {
 app.get("/", (req, res) => res.send("OK"));
 
 app.get("/version", (req, res) =>
-  res.send("scc-isa-voice v0.7 no-repeat + SSML ISA")
+  res.send("scc-isa-voice v0.8 borrower-names + no-repeat + SSML ISA")
 );
 
 // ====================
@@ -330,7 +355,14 @@ app.post("/scenario", (req, res) => {
   const mode = req.query.mode;
   const digit = req.body?.Digits;
 
-  const difficulty = digit === "1" ? "Standard" : digit === "2" ? "Moderate" : digit === "3" ? "Edge" : null;
+  const difficulty =
+    digit === "1"
+      ? "Standard"
+      : digit === "2"
+      ? "Moderate"
+      : digit === "3"
+      ? "Edge"
+      : null;
 
   if (!difficulty) {
     logEvent("SCENARIO_INVALID_DIFFICULTY", req, { mode, digit });
@@ -347,14 +379,22 @@ app.post("/scenario", (req, res) => {
     mode,
     difficulty,
     scenarioId: scenario?.id || null,
+    borrowerName: scenario?.borrowerName || null,
+    borrowerGender: scenario?.borrowerGender || null,
   });
 
   const summary = scenario?.summary || "Scenario unavailable.";
   const objective = scenario?.objective || "Objective unavailable.";
+  const borrowerName = scenario?.borrowerName || "Borrower";
 
+  // Narrator gives brief + objective, then borrower answers by name, then pause for training.
   res.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  ${saySsml(`Scenario loaded. ${summary} Objective. ${objective}`)}
+  ${saySsml(`Scenario loaded. ${summary} Primary objective. ${objective}`)}
+  ${saySsml("You are now connected.")}
+  ${saySsml(`Hello, this is ${borrowerName}.`)}
+  <Pause length="300"/>
+  ${saySsml("Session ended.")}
 </Response>`);
 });
 
