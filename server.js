@@ -7,7 +7,6 @@ app.use(express.urlencoded({ extended: false }));
 
 // -------- Logging helpers --------
 function sid(req) {
-  // Twilio sends CallSid in webhook POST body
   return req.body?.CallSid || "NO_CALL_SID";
 }
 
@@ -22,12 +21,84 @@ function logEvent(event, req, extra = {}) {
   console.log(JSON.stringify(payload));
 }
 
+// -------- Scenario Definitions (v5) --------
+// These are "case files" (not scripts). They define borrower context + objective.
+// Keep them short and deterministic. We can expand later.
+const SCENARIOS = {
+  mcd: {
+    Standard: [
+      {
+        id: "MCD-S-01",
+        summary:
+          "Borrower clicked an ad and is curious. They are friendly but vague. They haven't clearly stated whether this is a purchase or refinance.",
+        objective:
+          "ISA must explicitly establish intent (purchase/refi/heloc) before any application request.",
+      },
+    ],
+    Moderate: [
+      {
+        id: "MCD-M-01",
+        summary:
+          "Borrower is busy and distracted. They give short answers and try to rush off the phone. They may be moving soon but haven't confirmed anything.",
+        objective:
+          "ISA must slow down, ask direct intent questions, and avoid guessing or pushing application early.",
+      },
+    ],
+    Edge: [
+      {
+        id: "MCD-E-01",
+        summary:
+          "Borrower is anxious about credit and says they already talked to another lender. They are defensive and avoid committing to intent.",
+        objective:
+          "ISA must avoid LO-only answers, validate concern, and still obtain explicit intent before attempting application.",
+      },
+    ],
+  },
+
+  m1: {
+    Standard: [
+      {
+        id: "M1-S-01",
+        summary:
+          "Borrower clearly said they want to move forward and get pre-approved. They are cooperative and ready to take next steps.",
+        objective:
+          "ISA must obtain explicit M1 agreement: borrower clearly agrees to application or to speak with LO (per rules).",
+      },
+    ],
+    Moderate: [
+      {
+        id: "M1-M-01",
+        summary:
+          "Borrower says they want to move forward but hesitates on the application. They ask if it will hurt credit and want reassurance.",
+        objective:
+          "ISA must handle credit-pull fear correctly (no advice, no rates), and still seek explicit M1 agreement.",
+      },
+    ],
+    Edge: [
+      {
+        id: "M1-E-01",
+        summary:
+          "Borrower is suspicious and wants rates/payment quotes before doing anything. They press for details and resist committing.",
+        objective:
+          "ISA must defer LO-only questions properly and avoid unauthorized LO handoff without an application attempt.",
+      },
+    ],
+  },
+};
+
+function pickScenario(mode, difficulty) {
+  const bucket = SCENARIOS?.[mode]?.[difficulty] || [];
+  if (bucket.length === 0) return null;
+  const i = Math.floor(Math.random() * bucket.length);
+  return bucket[i];
+}
+
 // Health check
 app.get("/", (req, res) => res.status(200).send("OK"));
 
 // Version stamp
 app.get("/version", (req, res) =>
-  res.status(200).send("scc-isa-voice v0.4 logging")
+  res.status(200).send("scc-isa-voice v0.5 scenario-definitions")
 );
 
 // ---------- ENTRY ----------
@@ -60,10 +131,7 @@ app.post("/menu", (req, res) => {
 
   logEvent("MENU", req, { digits: digit });
 
-  const nextPath =
-    digit === "1" ? "/m1" :
-    digit === "2" ? "/mcd" :
-    "/voice";
+  const nextPath = digit === "1" ? "/m1" : digit === "2" ? "/mcd" : "/voice";
 
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -188,21 +256,23 @@ app.post("/difficulty", (req, res) => {
   res.type("text/xml").send(twiml);
 });
 
-// ---------- SCENARIO BRIEF ----------
+// ---------- SCENARIO BRIEF (now scenario-defined) ----------
 
 app.post("/scenario", (req, res) => {
   const mode = req.query.mode || "mcd";
   const digit = String(req.body?.Digits || "");
 
   const difficulty =
-    digit === "1" ? "Standard" :
-    digit === "2" ? "Moderate" :
-    digit === "3" ? "Edge" :
-    null;
-
-  logEvent("SCENARIO_SELECT", req, { mode, digits: digit, difficulty });
+    digit === "1"
+      ? "Standard"
+      : digit === "2"
+      ? "Moderate"
+      : digit === "3"
+      ? "Edge"
+      : null;
 
   if (!difficulty) {
+    logEvent("SCENARIO_SELECT", req, { mode, digits: digit, difficulty: null });
     return res.type("text/xml").send(`<?xml version="1.0"?>
 <Response>
   <Say voice="alice">Invalid selection.</Say>
@@ -210,11 +280,34 @@ app.post("/scenario", (req, res) => {
 </Response>`);
   }
 
+  const scenario = pickScenario(mode, difficulty);
+
+  logEvent("SCENARIO_LOADED", req, {
+    mode,
+    digits: digit,
+    difficulty,
+    scenarioId: scenario?.id || null,
+  });
+
+  const summary = scenario?.summary || "Scenario unavailable.";
+  const objective = scenario?.objective || "Objective unavailable.";
+
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="alice">
     ${mode.toUpperCase()} scenario loaded.
     Difficulty: ${difficulty}.
+    Scenario I D: ${scenario?.id || "unknown"}.
+  </Say>
+
+  <Say voice="alice">
+    Scenario brief:
+    ${summary}
+  </Say>
+
+  <Say voice="alice">
+    Primary objective:
+    ${objective}
   </Say>
 
   <Say voice="alice">
