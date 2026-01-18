@@ -1,56 +1,100 @@
 const express = require("express");
-
 const app = express();
 
 // Twilio posts x-www-form-urlencoded by default
 app.use(express.urlencoded({ extended: false }));
 
-// -------- Logging helpers --------
+// ====================
+// Logging helpers
+// ====================
 function sid(req) {
   return req.body?.CallSid || "NO_CALL_SID";
 }
 
 function logEvent(event, req, extra = {}) {
-  const payload = {
-    event,
-    sid: sid(req),
-    from: req.body?.From,
-    to: req.body?.To,
-    ...extra,
-  };
-  console.log(JSON.stringify(payload));
+  console.log(
+    JSON.stringify({
+      event,
+      sid: sid(req),
+      from: req.body?.From,
+      to: req.body?.To,
+      ...extra,
+    })
+  );
 }
 
-// -------- Scenario Definitions (v5) --------
-// These are "case files" (not scripts). They define borrower context + objective.
-// Keep them short and deterministic. We can expand later.
+// ====================
+// Scenario Definitions (Expanded)
+// ====================
 const SCENARIOS = {
   mcd: {
     Standard: [
       {
         id: "MCD-S-01",
         summary:
-          "Borrower clicked an ad and is curious. They are friendly but vague. They haven't clearly stated whether this is a purchase or refinance.",
+          "Borrower clicked an ad and is curious. They are friendly but vague and have not stated whether this is a purchase or refinance.",
         objective:
-          "ISA must explicitly establish intent (purchase/refi/heloc) before any application request.",
+          "ISA must explicitly establish intent before any application request.",
+      },
+      {
+        id: "MCD-S-02",
+        summary:
+          "Borrower says they are just looking and comparing options without committing.",
+        objective:
+          "ISA must avoid assuming intent and ask direct clarification questions.",
+      },
+      {
+        id: "MCD-S-03",
+        summary:
+          "Borrower is researching online and unsure what they want yet.",
+        objective:
+          "ISA must classify intent correctly or leave it unclassified without pressure.",
       },
     ],
     Moderate: [
       {
         id: "MCD-M-01",
         summary:
-          "Borrower is busy and distracted. They give short answers and try to rush off the phone. They may be moving soon but haven't confirmed anything.",
+          "Borrower is distracted and rushed, giving short answers.",
         objective:
-          "ISA must slow down, ask direct intent questions, and avoid guessing or pushing application early.",
+          "ISA must slow the call and obtain explicit intent.",
+      },
+      {
+        id: "MCD-M-02",
+        summary:
+          "Borrower mentions moving but gives unclear timing.",
+        objective:
+          "ISA must clarify whether real purchase intent exists.",
+      },
+      {
+        id: "MCD-M-03",
+        summary:
+          "Borrower talks about payments without stating loan purpose.",
+        objective:
+          "ISA must separate curiosity from intent and avoid LO-only answers.",
       },
     ],
     Edge: [
       {
         id: "MCD-E-01",
         summary:
-          "Borrower is anxious about credit and says they already talked to another lender. They are defensive and avoid committing to intent.",
+          "Borrower is anxious about credit and already spoke to another lender.",
         objective:
-          "ISA must avoid LO-only answers, validate concern, and still obtain explicit intent before attempting application.",
+          "ISA must validate concern and still establish intent.",
+      },
+      {
+        id: "MCD-E-02",
+        summary:
+          "Borrower challenges why questions are necessary.",
+        objective:
+          "ISA must maintain control and not bypass intent discovery.",
+      },
+      {
+        id: "MCD-E-03",
+        summary:
+          "Borrower gives conflicting purchase vs refinance information.",
+        objective:
+          "ISA must resolve ambiguity or hold state correctly.",
       },
     ],
   },
@@ -60,27 +104,69 @@ const SCENARIOS = {
       {
         id: "M1-S-01",
         summary:
-          "Borrower clearly said they want to move forward and get pre-approved. They are cooperative and ready to take next steps.",
+          "Borrower clearly wants to move forward and get pre-approved.",
         objective:
-          "ISA must obtain explicit M1 agreement: borrower clearly agrees to application or to speak with LO (per rules).",
+          "ISA must obtain explicit agreement to application or LO conversation.",
+      },
+      {
+        id: "M1-S-02",
+        summary:
+          "Borrower agrees to proceed but asks what happens next.",
+        objective:
+          "ISA must explain next steps and confirm M1.",
+      },
+      {
+        id: "M1-S-03",
+        summary:
+          "Borrower is cooperative and ready to start.",
+        objective:
+          "ISA must complete M1 cleanly without pressure.",
       },
     ],
     Moderate: [
       {
         id: "M1-M-01",
         summary:
-          "Borrower says they want to move forward but hesitates on the application. They ask if it will hurt credit and want reassurance.",
+          "Borrower hesitates due to credit concerns.",
         objective:
-          "ISA must handle credit-pull fear correctly (no advice, no rates), and still seek explicit M1 agreement.",
+          "ISA must handle credit fear correctly and seek M1.",
+      },
+      {
+        id: "M1-M-02",
+        summary:
+          "Borrower wants rates before committing.",
+        objective:
+          "ISA must defer LO-only questions and avoid handoff.",
+      },
+      {
+        id: "M1-M-03",
+        summary:
+          "Borrower says yes but sounds uncertain.",
+        objective:
+          "ISA must confirm real agreement, not tone.",
       },
     ],
     Edge: [
       {
         id: "M1-E-01",
         summary:
-          "Borrower is suspicious and wants rates/payment quotes before doing anything. They press for details and resist committing.",
+          "Borrower demands numbers before agreeing.",
         objective:
-          "ISA must defer LO-only questions properly and avoid unauthorized LO handoff without an application attempt.",
+          "ISA must defer LO-only questions and protect LO.",
+      },
+      {
+        id: "M1-E-02",
+        summary:
+          "Borrower insists on speaking with LO immediately.",
+        objective:
+          "ISA must avoid unauthorized LO handoff.",
+      },
+      {
+        id: "M1-E-03",
+        summary:
+          "Borrower verbally agrees but refuses application.",
+        objective:
+          "ISA must record non-consent and avoid false M1.",
       },
     ],
   },
@@ -88,244 +174,146 @@ const SCENARIOS = {
 
 function pickScenario(mode, difficulty) {
   const bucket = SCENARIOS?.[mode]?.[difficulty] || [];
-  if (bucket.length === 0) return null;
-  const i = Math.floor(Math.random() * bucket.length);
-  return bucket[i];
+  return bucket[Math.floor(Math.random() * bucket.length)];
 }
 
-// Health check
-app.get("/", (req, res) => res.status(200).send("OK"));
+// ====================
+// Health + Version
+// ====================
+app.get("/", (req, res) => res.send("OK"));
 
-// Version stamp
 app.get("/version", (req, res) =>
-  res.status(200).send("scc-isa-voice v0.5 scenario-definitions")
+  res.send("scc-isa-voice v0.6 expanded-scenarios + google-voice")
 );
 
-// ---------- ENTRY ----------
-
-// Incoming call handler
+// ====================
+// Call Entry
+// ====================
 app.post("/voice", (req, res) => {
   const baseUrl = `https://${req.get("host")}`;
-
   logEvent("CALL_START", req);
 
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+  res.type("text/xml").send(`
 <Response>
-  <Gather numDigits="1" timeout="6" action="${baseUrl}/menu" method="POST">
+  <Gather numDigits="1" action="${baseUrl}/menu" method="POST">
     <Say voice="Google.en-US-Chirp3-HD-Aoede">
       Welcome to SCC ISA training.
-      Press 1 for M1 scenario.
-      Press 2 for MCD scenario.
+      Press 1 for M1.
+      Press 2 for MCD.
     </Say>
   </Gather>
-  <Say voice="Google.en-US-Chirp3-HD-Aoede">No input received. Goodbye.</Say>
-</Response>`;
-
-  res.type("text/xml").send(twiml);
+</Response>`);
 });
 
-// Menu selection
 app.post("/menu", (req, res) => {
   const baseUrl = `https://${req.get("host")}`;
-  const digit = String(req.body?.Digits || "");
+  const digit = req.body?.Digits;
+  logEvent("MENU", req, { digit });
 
-  logEvent("MENU", req, { digits: digit });
+  const next = digit === "1" ? "/m1" : digit === "2" ? "/mcd" : "/voice";
 
-  const nextPath = digit === "1" ? "/m1" : digit === "2" ? "/mcd" : "/voice";
-
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+  res.type("text/xml").send(`
 <Response>
-  <Say voice="Google.en-US-Chirp3-HD-Aoede">Training will begin shortly.</Say>
-  <Redirect method="POST">${baseUrl}${nextPath}</Redirect>
-</Response>`;
-
-  res.type("text/xml").send(twiml);
+  <Redirect method="POST">${baseUrl}${next}</Redirect>
+</Response>`);
 });
 
-// ---------- GATES ----------
-
-// MCD gate screen
+// ====================
+// Gates
+// ====================
 app.post("/mcd", (req, res) => {
   const baseUrl = `https://${req.get("host")}`;
-
   logEvent("MCD_GATE_PROMPT", req);
 
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+  res.type("text/xml").send(`
 <Response>
-  <Gather numDigits="1" timeout="8" action="${baseUrl}/mcd/gate" method="POST">
+  <Gather numDigits="1" action="${baseUrl}/mcd/gate" method="POST">
     <Say voice="Google.en-US-Chirp3-HD-Aoede">
-      M C D training gate.
-      To begin, say: Provide me an M C D practice scenario.
-      For now, confirm by pressing 9.
+      To begin MCD training, press 9.
     </Say>
   </Gather>
-  <Redirect method="POST">${baseUrl}/voice</Redirect>
-</Response>`;
-
-  res.type("text/xml").send(twiml);
+</Response>`);
 });
 
-// MCD gate evaluator
 app.post("/mcd/gate", (req, res) => {
   const baseUrl = `https://${req.get("host")}`;
-  const digit = String(req.body?.Digits || "");
-  const pass = digit === "9";
+  const pass = req.body?.Digits === "9";
+  logEvent("MCD_GATE", req, { pass });
 
-  logEvent("MCD_GATE", req, { digits: digit, pass });
-
-  if (!pass) {
-    return res.type("text/xml").send(`<?xml version="1.0"?>
+  res.type("text/xml").send(`
 <Response>
-  <Say voice="Google.en-US-Chirp3-HD-Aoede">Gate failed.</Say>
-  <Redirect method="POST">${baseUrl}/mcd</Redirect>
-</Response>`);
-  }
-
-  res.type("text/xml").send(`<?xml version="1.0"?>
-<Response>
-  <Say voice="Google.en-US-Chirp3-HD-Aoede">Gate confirmed.</Say>
-  <Redirect method="POST">${baseUrl}/difficulty?mode=mcd</Redirect>
+  <Redirect method="POST">${baseUrl}/${pass ? "difficulty?mode=mcd" : "mcd"}</Redirect>
 </Response>`);
 });
 
-// M1 gate screen
 app.post("/m1", (req, res) => {
   const baseUrl = `https://${req.get("host")}`;
-
   logEvent("M1_GATE_PROMPT", req);
 
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+  res.type("text/xml").send(`
 <Response>
-  <Gather numDigits="1" timeout="8" action="${baseUrl}/m1/gate" method="POST">
+  <Gather numDigits="1" action="${baseUrl}/m1/gate" method="POST">
     <Say voice="Google.en-US-Chirp3-HD-Aoede">
-      M 1 training gate.
-      To begin, say: Provide me an M 1 practice scenario.
-      For now, confirm by pressing 8.
+      To begin M1 training, press 8.
     </Say>
   </Gather>
-  <Redirect method="POST">${baseUrl}/voice</Redirect>
-</Response>`;
-
-  res.type("text/xml").send(twiml);
+</Response>`);
 });
 
-// M1 gate evaluator
 app.post("/m1/gate", (req, res) => {
   const baseUrl = `https://${req.get("host")}`;
-  const digit = String(req.body?.Digits || "");
-  const pass = digit === "8";
+  const pass = req.body?.Digits === "8";
+  logEvent("M1_GATE", req, { pass });
 
-  logEvent("M1_GATE", req, { digits: digit, pass });
-
-  if (!pass) {
-    return res.type("text/xml").send(`<?xml version="1.0"?>
+  res.type("text/xml").send(`
 <Response>
-  <Say voice="Google.en-US-Chirp3-HD-Aoede">Gate failed.</Say>
-  <Redirect method="POST">${baseUrl}/m1</Redirect>
-</Response>`);
-  }
-
-  res.type("text/xml").send(`<?xml version="1.0"?>
-<Response>
-  <Say voice="Google.en-US-Chirp3-HD-Aoede">Gate confirmed.</Say>
-  <Redirect method="POST">${baseUrl}/difficulty?mode=m1</Redirect>
+  <Redirect method="POST">${baseUrl}/${pass ? "difficulty?mode=m1" : "m1"}</Redirect>
 </Response>`);
 });
 
-// ---------- DIFFICULTY SELECTOR ----------
-
+// ====================
+// Difficulty + Scenario
+// ====================
 app.post("/difficulty", (req, res) => {
   const baseUrl = `https://${req.get("host")}`;
-  const mode = req.query.mode || "mcd";
-
+  const mode = req.query.mode;
   logEvent("DIFFICULTY_PROMPT", req, { mode });
 
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+  res.type("text/xml").send(`
 <Response>
-  <Gather numDigits="1" timeout="8" action="${baseUrl}/scenario?mode=${mode}" method="POST">
+  <Gather numDigits="1" action="${baseUrl}/scenario?mode=${mode}" method="POST">
     <Say voice="Google.en-US-Chirp3-HD-Aoede">
-      Select difficulty.
       Press 1 for Standard.
       Press 2 for Moderate.
       Press 3 for Edge.
     </Say>
   </Gather>
-  <Redirect method="POST">${baseUrl}/voice</Redirect>
-</Response>`;
-
-  res.type("text/xml").send(twiml);
+</Response>`);
 });
 
-// ---------- SCENARIO BRIEF (now scenario-defined) ----------
-
 app.post("/scenario", (req, res) => {
-  const mode = req.query.mode || "mcd";
-  const digit = String(req.body?.Digits || "");
-
-  const difficulty =
-    digit === "1"
-      ? "Standard"
-      : digit === "2"
-      ? "Moderate"
-      : digit === "3"
-      ? "Edge"
-      : null;
-
-  if (!difficulty) {
-    logEvent("SCENARIO_SELECT", req, { mode, digits: digit, difficulty: null });
-    return res.type("text/xml").send(`<?xml version="1.0"?>
-<Response>
-  <Say voice="Google.en-US-Chirp3-HD-Aoede">Invalid selection.</Say>
-  <Hangup/>
-</Response>`);
-  }
-
+  const mode = req.query.mode;
+  const digit = req.body?.Digits;
+  const difficulty = digit === "1" ? "Standard" : digit === "2" ? "Moderate" : "Edge";
   const scenario = pickScenario(mode, difficulty);
 
   logEvent("SCENARIO_LOADED", req, {
     mode,
-    digits: digit,
     difficulty,
-    scenarioId: scenario?.id || null,
+    scenarioId: scenario.id,
   });
 
-  const summary = scenario?.summary || "Scenario unavailable.";
-  const objective = scenario?.objective || "Objective unavailable.";
-
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+  res.type("text/xml").send(`
 <Response>
   <Say voice="Google.en-US-Chirp3-HD-Aoede">
-    ${mode.toUpperCase()} scenario loaded.
-    Difficulty: ${difficulty}.
-    Scenario I D: ${scenario?.id || "unknown"}.
+    Scenario loaded.
+    ${scenario.summary}
+    Objective.
+    ${scenario.objective}
   </Say>
-
-  <Say voice="Google.en-US-Chirp3-HD-Aoede">
-    Scenario brief:
-    ${summary}
-  </Say>
-
-  <Say voice="Google.en-US-Chirp3-HD-Aoede">
-    Primary objective:
-    ${objective}
-  </Say>
-
-  <Say voice="Google.en-US-Chirp3-HD-Aoede">
-    Reminder:
-    Do not assume intent.
-    Application before intent is an automatic failure.
-    Loan officer handoff without application attempt is an automatic failure.
-    Coaching occurs only after end call.
-  </Say>
-
-  <Pause length="30"/>
-
-  <Say voice="Google.en-US-Chirp3-HD-Aoede">Session ended.</Say>
-</Response>`;
-
-  res.type("text/xml").send(twiml);
+</Response>`);
 });
 
-// ---------- START ----------
+// ====================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log("Server running"));
