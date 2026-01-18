@@ -1,13 +1,11 @@
 /* SCC ISA Training Voice System (Governance-First)
- * v1.2 — SCC flow + AI Borrower (Twilio Media Streams + OpenAI Realtime)
+ * v1.3 — SCC flow + AI Borrower (Twilio Stream + OpenAI Realtime)
  *
- * HARD INTENT:
- * - Twilio <Say> = Narrator only (Polly + SSML spelling control)
- * - AI Borrower audio = OpenAI Realtime streamed through Twilio Media Streams
- * - Scenarios are loaded from scenarios.json (authoritative)
+ * KEY CHANGE: NO SSML. (Prevents Twilio "Application error" from SSML parsing issues.)
+ * We force spelling via punctuation: "S. C. C.", "I. S. A.", "M. 1.", "M. C. D."
  *
  * ENV VARS REQUIRED:
- * - OPENAI_API_KEY (required)
+ * - OPENAI_API_KEY
  * OPTIONAL:
  * - REALTIME_MODEL (default: gpt-4o-realtime-preview)
  */
@@ -20,8 +18,6 @@ const { WebSocketServer } = require("ws");
 const WSClient = require("ws");
 
 const app = express();
-
-// Twilio sends x-www-form-urlencoded
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
@@ -71,14 +67,9 @@ function xmlEscape(s) {
     .replace(/'/g, "&apos;");
 }
 
-// Narrator says SSML you control (do NOT pass raw user content here)
-function twimlSaySSML(ssml) {
-  return `<Say voice="Polly.Joanna"><speak>${ssml}</speak></Say>`;
-}
-
-// Narrator says plain text safely (escape + wrap in SSML)
-function twimlSayText(text) {
-  return `<Say voice="Polly.Joanna"><speak>${xmlEscape(text)}</speak></Say>`;
+// Twilio-supported narrator voice ONLY (no SSML)
+function twimlSay(text) {
+  return `<Say voice="Polly.Joanna">${xmlEscape(text)}</Say>`;
 }
 
 function absUrl(req, p) {
@@ -86,74 +77,84 @@ function absUrl(req, p) {
   return `https://${host}${p}`;
 }
 
-function gatherOneDigit({ action, promptSSML, invalidSSML }) {
-  // action MUST be absolute URL to avoid Twilio dropping
+function gatherOneDigit({ action, prompt, invalidPrompt }) {
   return `
     <Gather input="dtmf" numDigits="1" action="${action}" method="POST" timeout="8">
-      ${twimlSaySSML(promptSSML)}
+      ${twimlSay(prompt)}
     </Gather>
-    ${twimlSaySSML(invalidSSML)}
-    <Redirect method="POST">${action}</Redirect>
+    ${twimlSay(invalidPrompt)}
+    <Redirect method="POST">${absUrlFromAction(action)}</Redirect>
   `;
+}
+
+// action is already absolute; keep Redirect safe
+function absUrlFromAction(action) {
+  return action;
+}
+
+function twimlResponse(inner) {
+  return `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}</Response>`;
+}
+
+function safeFailTwiml(message) {
+  return twimlResponse(`${twimlSay(message)}`);
 }
 
 // ---------- Health ----------
 app.get("/", (req, res) => res.status(200).send("OK"));
 app.get("/version", (req, res) =>
-  res.status(200).send("scc-isa-voice v1.2 SCC flow + AI borrower (Twilio Stream + OpenAI Realtime)")
+  res.status(200).send("scc-isa-voice v1.3 NO-SSML narrator + AI borrower bridge")
 );
 
 // =========================================================
-//  Twilio Voice: SCC Flow (Menu -> Gate -> Difficulty -> Scenario -> Connect Stream)
+//  Twilio Voice: SCC Flow
 // =========================================================
 
-app.post("/voice", (req, res) => {
-  const sid = req.body.CallSid;
-  console.log(JSON.stringify({ event: "CALL_START", sid }));
+// Support both POST (Twilio) and GET (human test) for /voice
+app.all("/voice", (req, res) => {
+  try {
+    const sid = req.body?.CallSid || req.query?.CallSid || null;
+    console.log(JSON.stringify({ event: "CALL_START", sid }));
 
-  const menuAction = absUrl(req, "/menu");
+    const menuAction = absUrl(req, "/menu");
 
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  ${gatherOneDigit({
-    action: menuAction,
-    promptSSML:
-      'Welcome to <say-as interpret-as="characters">SCC</say-as> ' +
-      '<say-as interpret-as="characters">ISA</say-as> training. ' +
-      'Press 1 for <say-as interpret-as="characters">M1</say-as> scenario. ' +
-      'Press 2 for <say-as interpret-as="characters">MCD</say-as> scenario.',
-    invalidSSML:
-      'Invalid choice. Press 1 for <say-as interpret-as="characters">M1</say-as>. ' +
-      'Press 2 for <say-as interpret-as="characters">MCD</say-as>.'
-  })}
-</Response>`;
+    const inner = `
+      <Gather input="dtmf" numDigits="1" action="${menuAction}" method="POST" timeout="8">
+        ${twimlSay("Welcome to S. C. C. I. S. A. training. Press 1 for M. 1. scenario. Press 2 for M. C. D. scenario.")}
+      </Gather>
+      ${twimlSay("Invalid choice. Press 1 for M. 1. Press 2 for M. C. D.")}
+      <Redirect method="POST">${menuAction}</Redirect>
+    `;
 
-  res.type("text/xml").send(twiml);
+    res.type("text/xml").status(200).send(twimlResponse(inner));
+  } catch (err) {
+    console.log(JSON.stringify({ event: "VOICE_FATAL", error: String(err?.message || err) }));
+    res.type("text/xml").status(200).send(safeFailTwiml("System error. Please hang up and try again."));
+  }
 });
 
 app.post("/menu", (req, res) => {
-  const sid = req.body.CallSid;
-  const digit = (req.body.Digits || "").trim();
-  console.log(JSON.stringify({ event: "MENU", sid, digit }));
+  try {
+    const sid = req.body.CallSid;
+    const digit = (req.body.Digits || "").trim();
+    console.log(JSON.stringify({ event: "MENU", sid, digit }));
 
-  if (digit === "1") {
-    const gatePrompt = absUrl(req, "/m1-gate-prompt");
-    return res.type("text/xml").send(`<?xml version="1.0"?>
-<Response><Redirect method="POST">${gatePrompt}</Redirect></Response>`);
+    if (digit === "1") {
+      const gatePrompt = absUrl(req, "/m1-gate-prompt");
+      return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${gatePrompt}</Redirect>`));
+    }
+
+    if (digit === "2") {
+      const gatePrompt = absUrl(req, "/mcd-gate-prompt");
+      return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${gatePrompt}</Redirect>`));
+    }
+
+    const back = absUrl(req, "/voice");
+    return res.type("text/xml").status(200).send(twimlResponse(`${twimlSay("Invalid selection. Returning to main menu.")}<Redirect method="POST">${back}</Redirect>`));
+  } catch (err) {
+    console.log(JSON.stringify({ event: "MENU_FATAL", error: String(err?.message || err) }));
+    return res.type("text/xml").status(200).send(safeFailTwiml("System error. Please hang up and try again."));
   }
-
-  if (digit === "2") {
-    const gatePrompt = absUrl(req, "/mcd-gate-prompt");
-    return res.type("text/xml").send(`<?xml version="1.0"?>
-<Response><Redirect method="POST">${gatePrompt}</Redirect></Response>`);
-  }
-
-  const back = absUrl(req, "/voice");
-  return res.type("text/xml").send(`<?xml version="1.0"?>
-<Response>
-  ${twimlSaySSML('Invalid selection. Returning to main menu.')}
-  <Redirect method="POST">${back}</Redirect>
-</Response>`);
 });
 
 // ---------- Gate Prompts + Gate Handlers ----------
@@ -162,15 +163,14 @@ app.post("/mcd-gate-prompt", (req, res) => {
   console.log(JSON.stringify({ event: "MCD_GATE_PROMPT", sid }));
 
   const action = absUrl(req, "/mcd-gate");
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  ${gatherOneDigit({
-    action,
-    promptSSML: '<say-as interpret-as="characters">MCD</say-as> gate. Press 9 to confirm and proceed.',
-    invalidSSML: 'Gate not passed. Press 9 to proceed.'
-  })}
-</Response>`;
-  res.type("text/xml").send(twiml);
+  const inner = `
+    <Gather input="dtmf" numDigits="1" action="${action}" method="POST" timeout="8">
+      ${twimlSay("M. C. D. gate. Press 9 to confirm and proceed.")}
+    </Gather>
+    ${twimlSay("Gate not passed. Press 9 to proceed.")}
+    <Redirect method="POST">${action}</Redirect>
+  `;
+  res.type("text/xml").status(200).send(twimlResponse(inner));
 });
 
 app.post("/mcd-gate", (req, res) => {
@@ -181,16 +181,11 @@ app.post("/mcd-gate", (req, res) => {
 
   if (!pass) {
     const back = absUrl(req, "/mcd-gate-prompt");
-    return res.type("text/xml").send(`<?xml version="1.0"?>
-<Response>
-  ${twimlSaySSML('Gate not passed.')}
-  <Redirect method="POST">${back}</Redirect>
-</Response>`);
+    return res.type("text/xml").status(200).send(twimlResponse(`${twimlSay("Gate not passed.")}<Redirect method="POST">${back}</Redirect>`));
   }
 
   const diffPrompt = absUrl(req, "/difficulty-prompt?mode=mcd");
-  return res.type("text/xml").send(`<?xml version="1.0"?>
-<Response><Redirect method="POST">${diffPrompt}</Redirect></Response>`);
+  return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${diffPrompt}</Redirect>`));
 });
 
 app.post("/m1-gate-prompt", (req, res) => {
@@ -198,15 +193,14 @@ app.post("/m1-gate-prompt", (req, res) => {
   console.log(JSON.stringify({ event: "M1_GATE_PROMPT", sid }));
 
   const action = absUrl(req, "/m1-gate");
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  ${gatherOneDigit({
-    action,
-    promptSSML: '<say-as interpret-as="characters">M1</say-as> gate. Press 8 to confirm and proceed.',
-    invalidSSML: 'Gate not passed. Press 8 to proceed.'
-  })}
-</Response>`;
-  res.type("text/xml").send(twiml);
+  const inner = `
+    <Gather input="dtmf" numDigits="1" action="${action}" method="POST" timeout="8">
+      ${twimlSay("M. 1. gate. Press 8 to confirm and proceed.")}
+    </Gather>
+    ${twimlSay("Gate not passed. Press 8 to proceed.")}
+    <Redirect method="POST">${action}</Redirect>
+  `;
+  res.type("text/xml").status(200).send(twimlResponse(inner));
 });
 
 app.post("/m1-gate", (req, res) => {
@@ -217,16 +211,11 @@ app.post("/m1-gate", (req, res) => {
 
   if (!pass) {
     const back = absUrl(req, "/m1-gate-prompt");
-    return res.type("text/xml").send(`<?xml version="1.0"?>
-<Response>
-  ${twimlSaySSML('Gate not passed.')}
-  <Redirect method="POST">${back}</Redirect>
-</Response>`);
+    return res.type("text/xml").status(200).send(twimlResponse(`${twimlSay("Gate not passed.")}<Redirect method="POST">${back}</Redirect>`));
   }
 
   const diffPrompt = absUrl(req, "/difficulty-prompt?mode=m1");
-  return res.type("text/xml").send(`<?xml version="1.0"?>
-<Response><Redirect method="POST">${diffPrompt}</Redirect></Response>`);
+  return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${diffPrompt}</Redirect>`));
 });
 
 // ---------- Difficulty ----------
@@ -237,18 +226,15 @@ app.post("/difficulty-prompt", (req, res) => {
 
   const action = absUrl(req, `/difficulty?mode=${encodeURIComponent(mode)}`);
 
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  ${gatherOneDigit({
-    action,
-    promptSSML:
-      'Select difficulty. Press 1 for Standard. Press 2 for Moderate. Press 3 for Edge.',
-    invalidSSML:
-      'Invalid selection. Press 1 for Standard, 2 for Moderate, or 3 for Edge.'
-  })}
-</Response>`;
+  const inner = `
+    <Gather input="dtmf" numDigits="1" action="${action}" method="POST" timeout="8">
+      ${twimlSay("Select difficulty. Press 1 for Standard. Press 2 for Moderate. Press 3 for Edge.")}
+    </Gather>
+    ${twimlSay("Invalid selection. Press 1 for Standard, 2 for Moderate, or 3 for Edge.")}
+    <Redirect method="POST">${action}</Redirect>
+  `;
 
-  res.type("text/xml").send(twiml);
+  res.type("text/xml").status(200).send(twimlResponse(inner));
 });
 
 app.post("/difficulty", (req, res) => {
@@ -263,21 +249,13 @@ app.post("/difficulty", (req, res) => {
 
   if (!difficulty || (mode !== "mcd" && mode !== "m1")) {
     const retry = absUrl(req, `/difficulty-prompt?mode=${encodeURIComponent(mode)}`);
-    return res.type("text/xml").send(`<?xml version="1.0"?>
-<Response>
-  ${twimlSaySSML('Invalid selection.')}
-  <Redirect method="POST">${retry}</Redirect>
-</Response>`);
+    return res.type("text/xml").status(200).send(twimlResponse(`${twimlSay("Invalid selection.")}<Redirect method="POST">${retry}</Redirect>`));
   }
 
   const scenario = pickScenario(mode, difficulty);
   if (!scenario) {
     const back = absUrl(req, "/voice");
-    return res.type("text/xml").send(`<?xml version="1.0"?>
-<Response>
-  ${twimlSaySSML('No scenarios available for this mode and difficulty. Returning to main menu.')}
-  <Redirect method="POST">${back}</Redirect>
-</Response>`);
+    return res.type("text/xml").status(200).send(twimlResponse(`${twimlSay("No scenarios available. Returning to main menu.")}<Redirect method="POST">${back}</Redirect>`));
   }
 
   console.log(JSON.stringify({
@@ -290,32 +268,29 @@ app.post("/difficulty", (req, res) => {
     borrowerGender: scenario.borrowerGender
   }));
 
-  // Stream URL must be wss://
   const host = req.headers["x-forwarded-host"] || req.headers.host;
   const streamUrl = `wss://${host}/twilio`;
 
   const safeSummary = String(scenario.summary || "");
   const safeObjective = String(scenario.objective || "");
 
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  ${twimlSayText(`Scenario. ${safeSummary}`)}
-  ${twimlSayText(`Primary objective. ${safeObjective}`)}
-  ${twimlSaySSML('You are now connected. The borrower will answer first.')}
+  const inner = `
+    ${twimlSay(`Scenario. ${safeSummary}`)}
+    ${twimlSay(`Primary objective. ${safeObjective}`)}
+    ${twimlSay("You are now connected. The borrower will answer first.")}
+    <Connect>
+      <Stream url="${streamUrl}">
+        <Parameter name="mode" value="${xmlEscape(mode)}" />
+        <Parameter name="difficulty" value="${xmlEscape(difficulty)}" />
+        <Parameter name="scenarioId" value="${xmlEscape(scenario.id)}" />
+        <Parameter name="borrowerName" value="${xmlEscape(scenario.borrowerName)}" />
+        <Parameter name="borrowerGender" value="${xmlEscape(scenario.borrowerGender)}" />
+        <Parameter name="objective" value="${xmlEscape(safeObjective)}" />
+      </Stream>
+    </Connect>
+  `;
 
-  <Connect>
-    <Stream url="${streamUrl}">
-      <Parameter name="mode" value="${xmlEscape(mode)}" />
-      <Parameter name="difficulty" value="${xmlEscape(difficulty)}" />
-      <Parameter name="scenarioId" value="${xmlEscape(scenario.id)}" />
-      <Parameter name="borrowerName" value="${xmlEscape(scenario.borrowerName)}" />
-      <Parameter name="borrowerGender" value="${xmlEscape(scenario.borrowerGender)}" />
-      <Parameter name="objective" value="${xmlEscape(safeObjective)}" />
-    </Stream>
-  </Connect>
-</Response>`;
-
-  res.type("text/xml").send(twiml);
+  res.type("text/xml").status(200).send(twimlResponse(inner));
 });
 
 // =========================================================
@@ -328,11 +303,9 @@ function requireEnv(name) {
   return v;
 }
 
-function openaiRealtimeConnect({ borrowerName, borrowerGender, mode, difficulty, scenarioId, objective }) {
+function openaiRealtimeConnect({ borrowerName, mode, difficulty, scenarioId, objective }) {
   const apiKey = requireEnv("OPENAI_API_KEY");
   const model = process.env.REALTIME_MODEL || "gpt-4o-realtime-preview";
-
-  // Realtime WS endpoint
   const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
 
   const ws = new WSClient(url, {
@@ -343,50 +316,40 @@ function openaiRealtimeConnect({ borrowerName, borrowerGender, mode, difficulty,
   });
 
   ws.on("open", () => {
-    // Voice choice: keep stable. (You can change later.)
-    const voice = "alloy";
-
-    // Borrower behavioral instructions (governance-first)
     const instructions =
       `You are a real mortgage borrower named ${borrowerName}. ` +
-      `You are in a training simulation. ` +
-      `Rules: You do NOT volunteer your mortgage intent unless the ISA explicitly asks. ` +
-      `You answer naturally, with minor hesitation. ` +
-      `You may ask basic questions, but do not become a coach. ` +
-      `Do not mention governance rules or scripts. ` +
-      `If asked about rates, underwriting, or LO-only topics, you respond as a borrower (curious/anxious) but you do not provide professional advice. ` +
+      `You do NOT volunteer your mortgage intent unless the ISA explicitly asks. ` +
+      `You speak naturally and briefly. ` +
+      `Do not coach. Do not mention scripts or governance. ` +
       `Context: mode=${mode}, difficulty=${difficulty}, scenarioId=${scenarioId}. ` +
       `Scenario objective: ${objective}`;
 
-    const sessionUpdate = {
+    ws.send(JSON.stringify({
       type: "session.update",
       session: {
         modalities: ["audio", "text"],
-        voice,
+        voice: "alloy",
         input_audio_format: "g711_ulaw",
         output_audio_format: "g711_ulaw",
         turn_detection: { type: "server_vad" },
         instructions
       }
-    };
-
-    ws.send(JSON.stringify(sessionUpdate));
+    }));
 
     // Borrower speaks first
-    const create = {
+    ws.send(JSON.stringify({
       type: "response.create",
       response: {
         modalities: ["audio", "text"],
-        instructions: `Start the call with: "Hello, this is ${borrowerName}." Then wait silently.`
+        instructions: `Start the call with: "Hello, this is ${borrowerName}." Then wait.`
       }
-    };
-    ws.send(JSON.stringify(create));
+    }));
   });
 
   return ws;
 }
 
-// Create HTTP server + attach WS upgrade handling
+// HTTP server + WS upgrade
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
@@ -395,17 +358,13 @@ server.on("upgrade", (req, socket, head) => {
     socket.destroy();
     return;
   }
-  wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit("connection", ws, req);
-  });
+  wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
 });
 
 wss.on("connection", (twilioWs) => {
   let callSid = null;
   let streamSid = null;
   let openaiWs = null;
-
-  let cp = {}; // custom parameters from Twilio start event
 
   function closeBoth() {
     try { twilioWs.close(); } catch {}
@@ -414,39 +373,22 @@ wss.on("connection", (twilioWs) => {
 
   twilioWs.on("message", (msg) => {
     let data;
-    try {
-      data = JSON.parse(msg.toString("utf8"));
-    } catch {
-      return;
-    }
+    try { data = JSON.parse(msg.toString("utf8")); } catch { return; }
 
     if (data.event === "start") {
       callSid = data.start?.callSid || null;
       streamSid = data.start?.streamSid || null;
-      cp = data.start?.customParameters || {};
+      const cp = data.start?.customParameters || {};
 
-      console.log(JSON.stringify({
-        event: "TWILIO_STREAM_START",
-        sid: callSid,
-        streamSid,
-        customParameters: cp
-      }));
-
-      const borrowerName = cp.borrowerName || "Mike";
-      const borrowerGender = cp.borrowerGender || "male";
-      const mode = cp.mode || "mcd";
-      const difficulty = cp.difficulty || "Standard";
-      const scenarioId = cp.scenarioId || "UNKNOWN";
-      const objective = cp.objective || "";
+      console.log(JSON.stringify({ event: "TWILIO_STREAM_START", sid: callSid, streamSid, customParameters: cp }));
 
       try {
         openaiWs = openaiRealtimeConnect({
-          borrowerName,
-          borrowerGender,
-          mode,
-          difficulty,
-          scenarioId,
-          objective
+          borrowerName: cp.borrowerName || "Mike",
+          mode: cp.mode || "mcd",
+          difficulty: cp.difficulty || "Standard",
+          scenarioId: cp.scenarioId || "UNKNOWN",
+          objective: cp.objective || ""
         });
 
         openaiWs.on("open", () => {
@@ -466,25 +408,19 @@ wss.on("connection", (twilioWs) => {
 
         openaiWs.on("message", (raw) => {
           let evt;
-          try {
-            evt = JSON.parse(raw.toString("utf8"));
-          } catch {
-            return;
-          }
+          try { evt = JSON.parse(raw.toString("utf8")); } catch { return; }
 
-          // Most common audio delta event
+          // Audio deltas
           if (evt.type === "response.audio.delta" && evt.delta) {
-            const payload = {
-              event: "media",
-              streamSid,
-              media: { payload: evt.delta } // base64 g711_ulaw
-            };
             try {
-              twilioWs.send(JSON.stringify(payload));
+              twilioWs.send(JSON.stringify({
+                event: "media",
+                streamSid,
+                media: { payload: evt.delta }
+              }));
             } catch {}
           }
 
-          // Optional: log critical errors returned by OpenAI
           if (evt.type === "error") {
             console.log(JSON.stringify({ event: "OPENAI_EVT_ERROR", sid: callSid, detail: evt.error || evt }));
           }
@@ -499,17 +435,11 @@ wss.on("connection", (twilioWs) => {
 
     if (data.event === "media") {
       if (!openaiWs || openaiWs.readyState !== 1) return;
-
-      const payload = data.media?.payload; // base64 g711_ulaw
+      const payload = data.media?.payload;
       if (!payload) return;
 
-      const input = {
-        type: "input_audio_buffer.append",
-        audio: payload
-      };
-
       try {
-        openaiWs.send(JSON.stringify(input));
+        openaiWs.send(JSON.stringify({ type: "input_audio_buffer.append", audio: payload }));
       } catch {}
       return;
     }
@@ -534,6 +464,4 @@ wss.on("connection", (twilioWs) => {
 
 // ---------- Boot ----------
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
