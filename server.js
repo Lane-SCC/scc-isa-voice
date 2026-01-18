@@ -1,13 +1,17 @@
 /* SCC ISA Training Voice System (Governance-First)
- * v1.3 — SCC flow + AI Borrower (Twilio Stream + OpenAI Realtime)
+ * v1.4 — SCC flow + AI Borrower (Twilio Stream + OpenAI Realtime)
  *
- * KEY CHANGE: NO SSML. (Prevents Twilio "Application error" from SSML parsing issues.)
- * We force spelling via punctuation: "S. C. C.", "I. S. A.", "M. 1.", "M. C. D."
+ * KEY POINTS:
+ * - Narrator uses Twilio <Say> with Polly (no SSML to avoid Twilio app errors).
+ * - SCC is spelled via punctuation: "S. C. C.", "I. S. A.", "M. 1.", "M. C. D."
+ * - AI borrower is OpenAI Realtime over WebSocket bridged to Twilio Media Streams.
+ * - Adds <Pause> after <Connect><Stream> to prevent immediate hangup if stream closes.
  *
- * ENV VARS REQUIRED:
+ * REQUIRED ENV VARS (Render):
  * - OPENAI_API_KEY
- * OPTIONAL:
- * - REALTIME_MODEL (default: gpt-4o-realtime-preview)
+ *
+ * OPTIONAL ENV VARS:
+ * - REALTIME_MODEL (default: gpt-realtime)
  */
 
 const fs = require("fs");
@@ -32,9 +36,8 @@ function loadScenarios() {
 }
 loadScenarios();
 
-// ---------- In-memory anti-repeat per (mode+difficulty) ----------
-const lastScenarioByKey = new Map(); // key: `${mode}:${difficulty}` => scenarioId
-
+// ---------- Anti-repeat per (mode+difficulty) ----------
+const lastScenarioByKey = new Map();
 function pickScenario(mode, difficulty) {
   const list = (SCENARIOS?.[mode]?.[difficulty]) || [];
   if (!list.length) return null;
@@ -67,7 +70,7 @@ function xmlEscape(s) {
     .replace(/'/g, "&apos;");
 }
 
-// Twilio-supported narrator voice ONLY (no SSML)
+// Twilio-supported narrator voice (NO SSML)
 function twimlSay(text) {
   return `<Say voice="Polly.Joanna">${xmlEscape(text)}</Say>`;
 }
@@ -77,40 +80,25 @@ function absUrl(req, p) {
   return `https://${host}${p}`;
 }
 
-function gatherOneDigit({ action, prompt, invalidPrompt }) {
-  return `
-    <Gather input="dtmf" numDigits="1" action="${action}" method="POST" timeout="8">
-      ${twimlSay(prompt)}
-    </Gather>
-    ${twimlSay(invalidPrompt)}
-    <Redirect method="POST">${absUrlFromAction(action)}</Redirect>
-  `;
-}
-
-// action is already absolute; keep Redirect safe
-function absUrlFromAction(action) {
-  return action;
-}
-
 function twimlResponse(inner) {
   return `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}</Response>`;
 }
 
-function safeFailTwiml(message) {
+function safeTwimlFail(message) {
   return twimlResponse(`${twimlSay(message)}`);
 }
 
 // ---------- Health ----------
 app.get("/", (req, res) => res.status(200).send("OK"));
 app.get("/version", (req, res) =>
-  res.status(200).send("scc-isa-voice v1.3 NO-SSML narrator + AI borrower bridge")
+  res.status(200).send("scc-isa-voice v1.4 AI borrower + keepalive pause + prod realtime model")
 );
 
 // =========================================================
-//  Twilio Voice: SCC Flow
+//  SCC Call Flow (Menu -> Gate -> Difficulty -> Scenario -> Connect Stream)
 // =========================================================
 
-// Support both POST (Twilio) and GET (human test) for /voice
+// Support both POST (Twilio) and GET (human test)
 app.all("/voice", (req, res) => {
   try {
     const sid = req.body?.CallSid || req.query?.CallSid || null;
@@ -129,7 +117,7 @@ app.all("/voice", (req, res) => {
     res.type("text/xml").status(200).send(twimlResponse(inner));
   } catch (err) {
     console.log(JSON.stringify({ event: "VOICE_FATAL", error: String(err?.message || err) }));
-    res.type("text/xml").status(200).send(safeFailTwiml("System error. Please hang up and try again."));
+    res.type("text/xml").status(200).send(safeTwimlFail("System error. Please hang up and try again."));
   }
 });
 
@@ -150,19 +138,22 @@ app.post("/menu", (req, res) => {
     }
 
     const back = absUrl(req, "/voice");
-    return res.type("text/xml").status(200).send(twimlResponse(`${twimlSay("Invalid selection. Returning to main menu.")}<Redirect method="POST">${back}</Redirect>`));
+    return res.type("text/xml").status(200).send(
+      twimlResponse(`${twimlSay("Invalid selection. Returning to main menu.")}<Redirect method="POST">${back}</Redirect>`)
+    );
   } catch (err) {
     console.log(JSON.stringify({ event: "MENU_FATAL", error: String(err?.message || err) }));
-    return res.type("text/xml").status(200).send(safeFailTwiml("System error. Please hang up and try again."));
+    return res.type("text/xml").status(200).send(safeTwimlFail("System error. Please hang up and try again."));
   }
 });
 
-// ---------- Gate Prompts + Gate Handlers ----------
+// ---------- Gates ----------
 app.post("/mcd-gate-prompt", (req, res) => {
   const sid = req.body.CallSid;
   console.log(JSON.stringify({ event: "MCD_GATE_PROMPT", sid }));
 
   const action = absUrl(req, "/mcd-gate");
+
   const inner = `
     <Gather input="dtmf" numDigits="1" action="${action}" method="POST" timeout="8">
       ${twimlSay("M. C. D. gate. Press 9 to confirm and proceed.")}
@@ -193,6 +184,7 @@ app.post("/m1-gate-prompt", (req, res) => {
   console.log(JSON.stringify({ event: "M1_GATE_PROMPT", sid }));
 
   const action = absUrl(req, "/m1-gate");
+
   const inner = `
     <Gather input="dtmf" numDigits="1" action="${action}" method="POST" timeout="8">
       ${twimlSay("M. 1. gate. Press 8 to confirm and proceed.")}
@@ -274,10 +266,12 @@ app.post("/difficulty", (req, res) => {
   const safeSummary = String(scenario.summary || "");
   const safeObjective = String(scenario.objective || "");
 
+  // IMPORTANT: Keepalive pause after Connect so call doesn't instantly die if stream closes.
   const inner = `
     ${twimlSay(`Scenario. ${safeSummary}`)}
     ${twimlSay(`Primary objective. ${safeObjective}`)}
     ${twimlSay("You are now connected. The borrower will answer first.")}
+
     <Connect>
       <Stream url="${streamUrl}">
         <Parameter name="mode" value="${xmlEscape(mode)}" />
@@ -288,6 +282,10 @@ app.post("/difficulty", (req, res) => {
         <Parameter name="objective" value="${xmlEscape(safeObjective)}" />
       </Stream>
     </Connect>
+
+    <Pause length="600"/>
+    ${twimlSay("Session ended. Returning to main menu.")}
+    <Redirect method="POST">${absUrl(req, "/voice")}</Redirect>
   `;
 
   res.type("text/xml").status(200).send(twimlResponse(inner));
@@ -305,7 +303,11 @@ function requireEnv(name) {
 
 function openaiRealtimeConnect({ borrowerName, mode, difficulty, scenarioId, objective }) {
   const apiKey = requireEnv("OPENAI_API_KEY");
-  const model = process.env.REALTIME_MODEL || "gpt-4o-realtime-preview";
+
+  // Default to production realtime model (more stable than preview).
+  // You can override via REALTIME_MODEL in Render.
+  const model = process.env.REALTIME_MODEL || "gpt-realtime";
+
   const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
 
   const ws = new WSClient(url, {
@@ -319,7 +321,7 @@ function openaiRealtimeConnect({ borrowerName, mode, difficulty, scenarioId, obj
     const instructions =
       `You are a real mortgage borrower named ${borrowerName}. ` +
       `You do NOT volunteer your mortgage intent unless the ISA explicitly asks. ` +
-      `You speak naturally and briefly. ` +
+      `You speak naturally, with mild hesitation. ` +
       `Do not coach. Do not mention scripts or governance. ` +
       `Context: mode=${mode}, difficulty=${difficulty}, scenarioId=${scenarioId}. ` +
       `Scenario objective: ${objective}`;
@@ -336,12 +338,11 @@ function openaiRealtimeConnect({ borrowerName, mode, difficulty, scenarioId, obj
       }
     }));
 
-    // Borrower speaks first
     ws.send(JSON.stringify({
       type: "response.create",
       response: {
         modalities: ["audio", "text"],
-        instructions: `Start the call with: "Hello, this is ${borrowerName}." Then wait.`
+        instructions: `Start the call with: "Hello, this is ${borrowerName}." Then wait silently.`
       }
     }));
   });
@@ -365,6 +366,12 @@ wss.on("connection", (twilioWs) => {
   let callSid = null;
   let streamSid = null;
   let openaiWs = null;
+  let startedAt = Date.now();
+  let openaiOpenLogged = false;
+
+  function log(event, obj = {}) {
+    console.log(JSON.stringify({ event, sid: callSid, streamSid, ...obj }));
+  }
 
   function closeBoth() {
     try { twilioWs.close(); } catch {}
@@ -380,7 +387,7 @@ wss.on("connection", (twilioWs) => {
       streamSid = data.start?.streamSid || null;
       const cp = data.start?.customParameters || {};
 
-      console.log(JSON.stringify({ event: "TWILIO_STREAM_START", sid: callSid, streamSid, customParameters: cp }));
+      log("TWILIO_STREAM_START", { customParameters: cp });
 
       try {
         openaiWs = openaiRealtimeConnect({
@@ -392,17 +399,18 @@ wss.on("connection", (twilioWs) => {
         });
 
         openaiWs.on("open", () => {
-          console.log(JSON.stringify({ event: "OPENAI_WS_OPEN", sid: callSid, model: process.env.REALTIME_MODEL || "gpt-4o-realtime-preview" }));
-          console.log(JSON.stringify({ event: "OPENAI_SESSION_CONFIGURED", sid: callSid }));
+          openaiOpenLogged = true;
+          log("OPENAI_WS_OPEN", { model: process.env.REALTIME_MODEL || "gpt-realtime" });
+          log("OPENAI_SESSION_CONFIGURED");
         });
 
         openaiWs.on("error", (err) => {
-          console.log(JSON.stringify({ event: "OPENAI_WS_ERROR", sid: callSid, error: String(err?.message || err) }));
+          log("OPENAI_WS_ERROR", { error: String(err?.message || err) });
           closeBoth();
         });
 
         openaiWs.on("close", () => {
-          console.log(JSON.stringify({ event: "OPENAI_WS_CLOSE", sid: callSid }));
+          log("OPENAI_WS_CLOSE", { msAlive: Date.now() - startedAt });
           closeBoth();
         });
 
@@ -410,23 +418,38 @@ wss.on("connection", (twilioWs) => {
           let evt;
           try { evt = JSON.parse(raw.toString("utf8")); } catch { return; }
 
-          // Audio deltas
-          if (evt.type === "response.audio.delta" && evt.delta) {
+          // Forward audio deltas (handle a few common variants)
+          const delta =
+            (evt.type === "response.audio.delta" && evt.delta) ? evt.delta :
+            (evt.type === "output_audio.delta" && evt.delta) ? evt.delta :
+            (evt.type === "audio.delta" && evt.delta) ? evt.delta :
+            null;
+
+          if (delta) {
             try {
               twilioWs.send(JSON.stringify({
                 event: "media",
                 streamSid,
-                media: { payload: evt.delta }
+                media: { payload: delta }
               }));
             } catch {}
+            return;
           }
 
+          // Log errors the model sends
           if (evt.type === "error") {
-            console.log(JSON.stringify({ event: "OPENAI_EVT_ERROR", sid: callSid, detail: evt.error || evt }));
+            log("OPENAI_EVT_ERROR", { detail: evt.error || evt });
+            return;
+          }
+
+          // If we never get audio and we're dying fast, this helps diagnose.
+          if (!openaiOpenLogged && evt.type) {
+            log("OPENAI_EVT_BEFORE_OPEN", { type: evt.type });
           }
         });
+
       } catch (err) {
-        console.log(JSON.stringify({ event: "OPENAI_INIT_FAILED", sid: callSid, error: String(err?.message || err) }));
+        log("OPENAI_INIT_FAILED", { error: String(err?.message || err) });
         closeBoth();
       }
 
@@ -445,19 +468,19 @@ wss.on("connection", (twilioWs) => {
     }
 
     if (data.event === "stop") {
-      console.log(JSON.stringify({ event: "TWILIO_STREAM_STOP", sid: callSid, streamSid }));
+      log("TWILIO_STREAM_STOP", { msAlive: Date.now() - startedAt });
       closeBoth();
       return;
     }
   });
 
   twilioWs.on("close", () => {
-    console.log(JSON.stringify({ event: "TWILIO_WS_CLOSE", sid: callSid, streamSid }));
+    log("TWILIO_WS_CLOSE", { msAlive: Date.now() - startedAt });
     try { openaiWs && openaiWs.close(); } catch {}
   });
 
   twilioWs.on("error", (err) => {
-    console.log(JSON.stringify({ event: "TWILIO_WS_ERROR", sid: callSid, streamSid, error: String(err?.message || err) }));
+    log("TWILIO_WS_ERROR", { error: String(err?.message || err) });
     try { openaiWs && openaiWs.close(); } catch {}
   });
 });
