@@ -112,13 +112,13 @@ app.post("/voice", (req, res) => {
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Gather numDigits="1" timeout="6" action="${baseUrl}/menu" method="POST">
-    <Say voice="alice">
+    <Say voice="Google.en-US-Chirp3-HD-Aoede">
       Welcome to SCC ISA training.
       Press 1 for M1 scenario.
       Press 2 for MCD scenario.
     </Say>
   </Gather>
-  <Say voice="alice">No input received. Goodbye.</Say>
+  <Say voice="Google.en-US-Chirp3-HD-Aoede">No input received. Goodbye.</Say>
 </Response>`;
 
   res.type("text/xml").send(twiml);
@@ -135,7 +135,7 @@ app.post("/menu", (req, res) => {
 
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="alice">Training will begin shortly.</Say>
+  <Say voice="Google.en-US-Chirp3-HD-Aoede">Training will begin shortly.</Say>
   <Redirect method="POST">${baseUrl}${nextPath}</Redirect>
 </Response>`;
 
@@ -153,7 +153,7 @@ app.post("/mcd", (req, res) => {
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Gather numDigits="1" timeout="8" action="${baseUrl}/mcd/gate" method="POST">
-    <Say voice="alice">
+    <Say voice="Google.en-US-Chirp3-HD-Aoede">
       M C D training gate.
       To begin, say: Provide me an M C D practice scenario.
       For now, confirm by pressing 9.
@@ -176,14 +176,14 @@ app.post("/mcd/gate", (req, res) => {
   if (!pass) {
     return res.type("text/xml").send(`<?xml version="1.0"?>
 <Response>
-  <Say voice="alice">Gate failed.</Say>
+  <Say voice="Google.en-US-Chirp3-HD-Aoede">Gate failed.</Say>
   <Redirect method="POST">${baseUrl}/mcd</Redirect>
 </Response>`);
   }
 
   res.type("text/xml").send(`<?xml version="1.0"?>
 <Response>
-  <Say voice="alice">Gate confirmed.</Say>
+  <Say voice="Google.en-US-Chirp3-HD-Aoede">Gate confirmed.</Say>
   <Redirect method="POST">${baseUrl}/difficulty?mode=mcd</Redirect>
 </Response>`);
 });
@@ -197,7 +197,7 @@ app.post("/m1", (req, res) => {
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Gather numDigits="1" timeout="8" action="${baseUrl}/m1/gate" method="POST">
-    <Say voice="alice">
+    <Say voice="Google.en-US-Chirp3-HD-Aoede">
       M 1 training gate.
       To begin, say: Provide me an M 1 practice scenario.
       For now, confirm by pressing 8.
@@ -220,14 +220,14 @@ app.post("/m1/gate", (req, res) => {
   if (!pass) {
     return res.type("text/xml").send(`<?xml version="1.0"?>
 <Response>
-  <Say voice="alice">Gate failed.</Say>
+  <Say voice="Google.en-US-Chirp3-HD-Aoede">Gate failed.</Say>
   <Redirect method="POST">${baseUrl}/m1</Redirect>
 </Response>`);
   }
 
   res.type("text/xml").send(`<?xml version="1.0"?>
 <Response>
-  <Say voice="alice">Gate confirmed.</Say>
+  <Say voice="Google.en-US-Chirp3-HD-Aoede">Gate confirmed.</Say>
   <Redirect method="POST">${baseUrl}/difficulty?mode=m1</Redirect>
 </Response>`);
 });
@@ -243,7 +243,7 @@ app.post("/difficulty", (req, res) => {
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Gather numDigits="1" timeout="8" action="${baseUrl}/scenario?mode=${mode}" method="POST">
-    <Say voice="alice">
+    <Say voice="Google.en-US-Chirp3-HD-Aoede">
       Select difficulty.
       Press 1 for Standard.
       Press 2 for Moderate.
@@ -275,7 +275,7 @@ app.post("/scenario", (req, res) => {
     logEvent("SCENARIO_SELECT", req, { mode, digits: digit, difficulty: null });
     return res.type("text/xml").send(`<?xml version="1.0"?>
 <Response>
-  <Say voice="alice">Invalid selection.</Say>
+  <Say voice="Google.en-US-Chirp3-HD-Aoede">Invalid selection.</Say>
   <Hangup/>
 </Response>`);
   }
@@ -294,23 +294,23 @@ app.post("/scenario", (req, res) => {
 
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="alice">
+  <Say voice="Google.en-US-Chirp3-HD-Aoede">
     ${mode.toUpperCase()} scenario loaded.
     Difficulty: ${difficulty}.
     Scenario I D: ${scenario?.id || "unknown"}.
   </Say>
 
-  <Say voice="alice">
+  <Say voice="Google.en-US-Chirp3-HD-Aoede">
     Scenario brief:
     ${summary}
   </Say>
 
-  <Say voice="alice">
+  <Say voice="Google.en-US-Chirp3-HD-Aoede">
     Primary objective:
     ${objective}
   </Say>
 
-  <Say voice="alice">
+  <Say voice="Google.en-US-Chirp3-HD-Aoede">
     Reminder:
     Do not assume intent.
     Application before intent is an automatic failure.
@@ -320,7 +320,7 @@ app.post("/scenario", (req, res) => {
 
   <Pause length="30"/>
 
-  <Say voice="alice">Session ended.</Say>
+  <Say voice="Google.en-US-Chirp3-HD-Aoede">Session ended.</Say>
 </Response>`;
 
   res.type("text/xml").send(twiml);
