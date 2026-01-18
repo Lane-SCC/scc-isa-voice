@@ -10,7 +10,6 @@ app.get("/", (req, res) => res.status(200).send("OK"));
 
 // Incoming call handler (Twilio hits this URL)
 app.post("/voice", (req, res) => {
-  // Build absolute base URL (required for Gather action)
   const host = req.get("host");
   const baseUrl = `https://${host}`;
 
@@ -29,21 +28,44 @@ app.post("/voice", (req, res) => {
   res.type("text/xml").send(twiml);
 });
 
-// Handles DTMF selection
+// Handles DTMF selection and routes to the next step
 app.post("/menu", (req, res) => {
-  const digit = (req.body && req.body.Digits) ? String(req.body.Digits) : "";
+  const host = req.get("host");
+  const baseUrl = `https://${host}`;
+  const digit = req.body?.Digits ? String(req.body.Digits) : "";
 
-  let message;
-  if (digit === "1") message = "You selected M1 scenario. Goodbye.";
-  else if (digit === "2") message = "You selected MCD scenario. Goodbye.";
-  else message = "Invalid selection. Goodbye.";
+  let nextPath;
+  if (digit === "1") nextPath = "/m1";
+  else if (digit === "2") nextPath = "/mcd";
+  else nextPath = "/voice"; // replay menu if invalid
 
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="alice">${message}</Say>
-  <Hangup/>
+  <Say voice="alice">Training will begin shortly.</Say>
+  <Redirect method="POST">${baseUrl}${nextPath}</Redirect>
 </Response>`;
 
+  res.type("text/xml").send(twiml);
+});
+
+// Placeholder endpoints so the call doesn't drop
+app.post("/mcd", (req, res) => {
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">MCD scenario placeholder. Borrower simulation will begin here.</Say>
+  <Pause length="60"/>
+  <Say voice="alice">Session ended.</Say>
+</Response>`;
+  res.type("text/xml").send(twiml);
+});
+
+app.post("/m1", (req, res) => {
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">M1 scenario placeholder. Borrower simulation will begin here.</Say>
+  <Pause length="60"/>
+  <Say voice="alice">Session ended.</Say>
+</Response>`;
   res.type("text/xml").send(twiml);
 });
 
