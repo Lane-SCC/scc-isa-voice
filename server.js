@@ -5,12 +5,29 @@ const app = express();
 // Twilio posts x-www-form-urlencoded by default
 app.use(express.urlencoded({ extended: false }));
 
+// -------- Logging helpers --------
+function sid(req) {
+  // Twilio sends CallSid in webhook POST body
+  return req.body?.CallSid || "NO_CALL_SID";
+}
+
+function logEvent(event, req, extra = {}) {
+  const payload = {
+    event,
+    sid: sid(req),
+    from: req.body?.From,
+    to: req.body?.To,
+    ...extra,
+  };
+  console.log(JSON.stringify(payload));
+}
+
 // Health check
 app.get("/", (req, res) => res.status(200).send("OK"));
 
 // Version stamp
 app.get("/version", (req, res) =>
-  res.status(200).send("scc-isa-voice v0.3 gates+dtmf-scenarios")
+  res.status(200).send("scc-isa-voice v0.4 logging")
 );
 
 // ---------- ENTRY ----------
@@ -18,6 +35,8 @@ app.get("/version", (req, res) =>
 // Incoming call handler
 app.post("/voice", (req, res) => {
   const baseUrl = `https://${req.get("host")}`;
+
+  logEvent("CALL_START", req);
 
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -39,6 +58,8 @@ app.post("/menu", (req, res) => {
   const baseUrl = `https://${req.get("host")}`;
   const digit = String(req.body?.Digits || "");
 
+  logEvent("MENU", req, { digits: digit });
+
   const nextPath =
     digit === "1" ? "/m1" :
     digit === "2" ? "/mcd" :
@@ -59,6 +80,8 @@ app.post("/menu", (req, res) => {
 app.post("/mcd", (req, res) => {
   const baseUrl = `https://${req.get("host")}`;
 
+  logEvent("MCD_GATE_PROMPT", req);
+
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Gather numDigits="1" timeout="8" action="${baseUrl}/mcd/gate" method="POST">
@@ -78,8 +101,11 @@ app.post("/mcd", (req, res) => {
 app.post("/mcd/gate", (req, res) => {
   const baseUrl = `https://${req.get("host")}`;
   const digit = String(req.body?.Digits || "");
+  const pass = digit === "9";
 
-  if (digit !== "9") {
+  logEvent("MCD_GATE", req, { digits: digit, pass });
+
+  if (!pass) {
     return res.type("text/xml").send(`<?xml version="1.0"?>
 <Response>
   <Say voice="alice">Gate failed.</Say>
@@ -97,6 +123,8 @@ app.post("/mcd/gate", (req, res) => {
 // M1 gate screen
 app.post("/m1", (req, res) => {
   const baseUrl = `https://${req.get("host")}`;
+
+  logEvent("M1_GATE_PROMPT", req);
 
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -117,8 +145,11 @@ app.post("/m1", (req, res) => {
 app.post("/m1/gate", (req, res) => {
   const baseUrl = `https://${req.get("host")}`;
   const digit = String(req.body?.Digits || "");
+  const pass = digit === "8";
 
-  if (digit !== "8") {
+  logEvent("M1_GATE", req, { digits: digit, pass });
+
+  if (!pass) {
     return res.type("text/xml").send(`<?xml version="1.0"?>
 <Response>
   <Say voice="alice">Gate failed.</Say>
@@ -138,6 +169,8 @@ app.post("/m1/gate", (req, res) => {
 app.post("/difficulty", (req, res) => {
   const baseUrl = `https://${req.get("host")}`;
   const mode = req.query.mode || "mcd";
+
+  logEvent("DIFFICULTY_PROMPT", req, { mode });
 
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -167,6 +200,8 @@ app.post("/scenario", (req, res) => {
     digit === "3" ? "Edge" :
     null;
 
+  logEvent("SCENARIO_SELECT", req, { mode, digits: digit, difficulty });
+
   if (!difficulty) {
     return res.type("text/xml").send(`<?xml version="1.0"?>
 <Response>
@@ -190,7 +225,7 @@ app.post("/scenario", (req, res) => {
     Coaching occurs only after end call.
   </Say>
 
-  <Pause length="90"/>
+  <Pause length="30"/>
 
   <Say voice="alice">Session ended.</Say>
 </Response>`;
@@ -199,6 +234,5 @@ app.post("/scenario", (req, res) => {
 });
 
 // ---------- START ----------
-
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
