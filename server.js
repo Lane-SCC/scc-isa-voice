@@ -1,33 +1,19 @@
 /* SCC ISA Training Voice System (Governance-First)
- * server.js — v5.0 "Masterpiece"
+ * server.js — v5.1 "Scorecard + Exam Mode"
  *
- * What this version nails:
- * ✅ OpenAI Realtime: modalities MUST be ["audio","text"] (your logs proved it)
- * ✅ Twilio playback stability: strict 20ms μ-law frames (160 bytes) + jitter prebuffer
- * ✅ Static/pops reduction: adaptive underflow strategy + queue caps + epoch gating
- * ✅ Hard borrower role lock at session-level + borrower speaks first
- * ✅ Server-side role drift tripwire (text-based) + emergency brake (cancel + clear + reset)
- * ✅ Modules: MCD, M1, M2 (M2 = risk containment under pressure) + gates + difficulty
- * ✅ Authoritative scenarios.json (no scenario content in code)
- * ✅ Audit-grade JSONL logging (CallSid keyed) — ready for certification/reporting later
+ * Adds (without destabilizing audio layer):
+ * ✅ Practice vs Exam selection BEFORE streaming
+ * ✅ Exam lockout: 1 exam/day per phone number per module
+ * ✅ Connect vs Scorecard choice BEFORE streaming
+ * ✅ Scorecard endpoint (spoken) — PASS/FAIL + RuleFocus + violations + directive
+ * ✅ Exam-mode tripwire = HARD FAIL (no reset)
  *
- * Notes (pragmatic realities):
- * - Twilio Media Streams does NOT deliver DTMF during <Connect><Stream>. (DTMF is handled pre-stream.)
- * - This file focuses on the core: borrower realism + governance enforcement + audio correctness.
- * - Post-call spoken scorecard is best done by a separate "review call" or a UI; we log everything needed.
- *
- * Required files:
- * - package.json must include: express, ws
- * - scenarios.json must include keys: mcd/m1/m2 -> Standard/Moderate/Edge arrays
- *
- * Env vars:
- * - OPENAI_API_KEY (required)
- * - REALTIME_MODEL (optional; default gpt-realtime-mini)
- * - PREBUFFER_FRAMES (optional; default 4)
- * - SEND_SILENCE_ON_UNDERFLOW (optional; default true)
- * - MAX_OUT_QUEUE_FRAMES (optional; default 250)
- * - MAX_INBOUND_BUFFER_FRAMES (optional; default 50)
- * - VAD_* (optional; stable defaults)
+ * Keeps:
+ * ✅ OpenAI modalities ["audio","text"]
+ * ✅ Strict 20ms μ-law framing + jitter prebuffer
+ * ✅ Epoch gating
+ * ✅ Role lock + borrower speaks first
+ * ✅ Drift tripwire + emergency brake (practice mode)
  */
 
 "use strict";
@@ -51,13 +37,13 @@ app.use(express.json());
 // =========================================================
 function requireEnv(name) {
   const v = process.env[name];
-  if (!v) throw new Error(`Missing ${name} env var`);
+  if (!v) throw new Error(Missing ${name} env var);
   return v;
 }
 
 const REALTIME_MODEL = process.env.REALTIME_MODEL || "gpt-realtime-mini";
 const OPENAI_URL = (model) =>
-  `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
+  wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)};
 
 // Your logs: supported combos are ["text"] or ["audio","text"]. Not ["audio"].
 const OPENAI_MODALITIES = ["audio", "text"];
@@ -110,7 +96,7 @@ function pickScenario(mode, difficulty) {
   const list = (SCENARIOS?.[mode]?.[difficulty]) || [];
   if (!list.length) return null;
 
-  const key = `${mode}:${difficulty}`;
+  const key = ${mode}:${difficulty};
   const last = lastScenarioByKey.get(key);
 
   let pick = list[Math.floor(Math.random() * list.length)];
@@ -129,6 +115,67 @@ function pickScenario(mode, difficulty) {
 }
 
 // =========================================================
+// In-memory call state (Pilot v1)
+// NOTE: resets on deploy/restart. Perfect for pre-pilot.
+// =========================================================
+const CALL_STATE = new Map(); // CallSid -> state
+const EXAM_ATTEMPTS = new Map(); // ${date}:${from}:${mode} -> {ts, callSid}
+
+function todayKey() {
+  const d = new Date();
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return ${yyyy}-${mm}-${dd};
+}
+
+function getOrInitState(callSid) {
+  if (!CALL_STATE.has(callSid)) {
+    CALL_STATE.set(callSid, {
+      callSid,
+      from: "",
+      mode: "",
+      difficulty: "",
+      examMode: false,
+
+      scenarioId: "",
+      ruleFocus: [],
+      baitType: "",
+      requiredOutcome: "",
+
+      violations: [], // {code, detail, ts}
+      tripwireCount: 0,
+      underflowTicks: 0,
+
+      startedAt: Date.now(),
+      endedAt: null
+    });
+  }
+  return CALL_STATE.get(callSid);
+}
+
+function addViolation(callSid, code, detail) {
+  const st = getOrInitState(callSid);
+  st.violations.push({ code, detail: String(detail || ""), ts: Date.now() });
+}
+
+function computeScore(callSid) {
+  const st = getOrInitState(callSid);
+  const fail = st.tripwireCount > 0 || st.violations.length > 0;
+  return { pass: !fail, tripwireCount: st.tripwireCount, violations: st.violations };
+}
+
+function coachingDirective(st) {
+  const rf = st.ruleFocus || [];
+  if (rf.includes("NO_HANDOFF")) return "Next rep: do not use LO handoff to exit pressure. Keep ownership and set a time.";
+  if (rf.includes("NO_RATES")) return "Next rep: deflect rate bait cleanly and return to the next step.";
+  if (rf.includes("NO_ASSUME_INTENT")) return "Next rep: do not label intent until borrower states it explicitly.";
+  if (rf.includes("APPLICATION_REQUIRED")) return "Next rep: make the application attempt cleanly and early once intent is explicit.";
+  if (rf.includes("ESCALATION_NOT_HANDOFF")) return "Next rep: escalate LO-only questions without handing off ownership.";
+  return "Next rep: keep it simple — confirm status, set next step, protect the LO.";
+}
+
+// =========================================================
 // Helpers
 // =========================================================
 function xmlEscape(s) {
@@ -140,26 +187,26 @@ function xmlEscape(s) {
 function absUrl(req, p) {
   const proto = (req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
   const host = (req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
-  return `${proto}://${host}${p}`;
+  return ${proto}://${host}${p};
 }
 
 function twimlResponse(inner) {
-  return `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}</Response>`;
+  return <?xml version="1.0" encoding="UTF-8"?><Response>${inner}</Response>;
 }
 
 function say(text) {
   const cleaned = String(text).replace(/\bISA\b/g, "I. S. A.");
-  return `<Say voice="${NARRATOR_VOICE}">${xmlEscape(cleaned)}</Say>`;
+  return <Say voice="${NARRATOR_VOICE}">${xmlEscape(cleaned)}</Say>;
 }
 
 function gatherOneDigit({ action, promptText, invalidText }) {
-  return `
+  return 
     <Gather input="dtmf" numDigits="1" action="${action}" method="POST" timeout="8">
       ${say(promptText)}
     </Gather>
     ${say(invalidText)}
     <Redirect method="POST">${action}</Redirect>
-  `;
+  ;
 }
 
 function clampInt(n, min, max) {
@@ -263,34 +310,32 @@ function resolveBorrowerMeta({ scenario, style, rng }) {
 // Borrower role lock (session-level; non-negotiable)
 // =========================================================
 function buildHardBorrowerSessionInstructions(mode, difficulty, scenario, borrowerName, borrowerMeta) {
-  // M2 adds explicit “risk containment” guidance.
   const isM2 = String(mode).toLowerCase() === "m2";
 
-  const m2Pressure = isM2 ? `
+  const m2Pressure = isM2 ? 
 M2 IS POST-APPLICATION FOLLOW-UP. This is risk containment under pressure.
 You will bait common ISA mistakes (rate bait, credit bait, "have LO call me") WITHOUT being a cartoon villain.
 You MUST NEVER accept an unauthorized LO handoff. If the caller tries to handoff, resist as borrower.
 If asked for LO-only answers (rates, underwriting predictions, credit fixing, approval certainty): you do NOT answer.
 You instead say you’re unsure and ask what the caller suggests, or ask for the caller to explain the next step.
-`.trim() : "";
+.trim() : "";
 
-  // Scenario fields that help govern M2 bait (optional in JSON; safe to omit)
   const stallReason = normalizeMeta(scenario?.stallReason);
   const baitType = normalizeMeta(scenario?.baitType);
   const escalationTrigger = normalizeMeta(scenario?.escalationTrigger);
   const redLine = normalizeMeta(scenario?.redLine);
   const requiredOutcome = normalizeMeta(scenario?.requiredOutcome);
 
-  const m2Fields = isM2 ? `
+  const m2Fields = isM2 ? 
 M2 SCENARIO FIELDS (authoritative):
 - stallReason: ${stallReason || "(unspecified)"}
 - baitType: ${baitType || "(unspecified)"}
 - escalationTrigger: ${escalationTrigger || "(unspecified)"}
 - redLine: ${redLine || "(unspecified)"}
 - requiredOutcome: ${requiredOutcome || "(unspecified)"}
-`.trim() : "";
+.trim() : "";
 
-  return `
+  return 
 ABSOLUTE ROLE LOCK — NON-NEGOTIABLE
 
 You are a SIMULATED MORTGAGE BORROWER named ${borrowerName}.
@@ -337,7 +382,7 @@ ${m2Pressure}
 ${m2Fields}
 
 VIOLATION OF ROLE = FAILURE CONDITION.
-`.trim();
+.trim();
 }
 
 function pickBorrowerVoice(gender) {
@@ -350,8 +395,6 @@ function pickBorrowerVoice(gender) {
 // =========================================================
 // Role drift tripwire (text-based)
 // =========================================================
-// We only need a few high-signal patterns. Keep it strict and decisive.
-// If drift triggers: cancel + clear + reset borrower identity.
 const DRIFT_PATTERNS = [
   /\b(i can|i will|i recommend|you should|based on|current market|qualify|approval|apr|rate|offer you)\b/i,
   /\b(underwriting|eligible|you qualify|debt to income|dti|fico|credit score|loan program)\b/i,
@@ -369,10 +412,10 @@ function hasRoleDrift(text) {
 // Health
 // =========================================================
 app.get("/", (_, res) => res.status(200).send("OK"));
-app.get("/version", (_, res) => res.status(200).send("scc-isa-voice v5.0 masterpiece"));
+app.get("/version", (_, res) => res.status(200).send("scc-isa-voice v5.1 scorecard+exam"));
 
 // =========================================================
-// SCC Call Flow (DTMF menus + gates + difficulty)
+// SCC Call Flow (DTMF menus + gates + exam + difficulty + connect/score)
 // =========================================================
 app.all("/voice", (req, res) => {
   try {
@@ -403,12 +446,12 @@ app.post("/menu", (req, res) => {
   const digit = (req.body.Digits || "").trim();
   console.log(JSON.stringify({ event: "MENU", sid, digit }));
 
-  if (digit === "1") return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${absUrl(req, "/m1-gate-prompt")}</Redirect>`));
-  if (digit === "2") return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${absUrl(req, "/mcd-gate-prompt")}</Redirect>`));
-  if (digit === "3") return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${absUrl(req, "/m2-gate-prompt")}</Redirect>`));
+  if (digit === "1") return res.type("text/xml").status(200).send(twimlResponse(<Redirect method="POST">${absUrl(req, "/m1-gate-prompt")}</Redirect>));
+  if (digit === "2") return res.type("text/xml").status(200).send(twimlResponse(<Redirect method="POST">${absUrl(req, "/mcd-gate-prompt")}</Redirect>));
+  if (digit === "3") return res.type("text/xml").status(200).send(twimlResponse(<Redirect method="POST">${absUrl(req, "/m2-gate-prompt")}</Redirect>));
 
   return res.type("text/xml").status(200).send(
-    twimlResponse(`${say("Invalid selection. Returning to main menu.")}<Redirect method="POST">${absUrl(req, "/voice")}</Redirect>`)
+    twimlResponse(${say("Invalid selection. Returning to main menu.")}<Redirect method="POST">${absUrl(req, "/voice")}</Redirect>)
   );
 });
 
@@ -424,8 +467,8 @@ app.post("/mcd-gate-prompt", (req, res) => {
 });
 app.post("/mcd-gate", (req, res) => {
   const pass = (req.body.Digits || "").trim() === "9";
-  if (!pass) return res.type("text/xml").status(200).send(twimlResponse(`${say("Gate not confirmed.")}<Redirect method="POST">${absUrl(req, "/mcd-gate-prompt")}</Redirect>`));
-  return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${absUrl(req, "/difficulty-prompt?mode=mcd")}</Redirect>`));
+  if (!pass) return res.type("text/xml").status(200).send(twimlResponse(${say("Gate not confirmed.")}<Redirect method="POST">${absUrl(req, "/mcd-gate-prompt")}</Redirect>));
+  return res.type("text/xml").status(200).send(twimlResponse(<Redirect method="POST">${absUrl(req, "/exam-prompt?mode=mcd")}</Redirect>));
 });
 
 app.post("/m1-gate-prompt", (req, res) => {
@@ -439,8 +482,8 @@ app.post("/m1-gate-prompt", (req, res) => {
 });
 app.post("/m1-gate", (req, res) => {
   const pass = (req.body.Digits || "").trim() === "8";
-  if (!pass) return res.type("text/xml").status(200).send(twimlResponse(`${say("Gate not confirmed.")}<Redirect method="POST">${absUrl(req, "/m1-gate-prompt")}</Redirect>`));
-  return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${absUrl(req, "/difficulty-prompt?mode=m1")}</Redirect>`));
+  if (!pass) return res.type("text/xml").status(200).send(twimlResponse(${say("Gate not confirmed.")}<Redirect method="POST">${absUrl(req, "/m1-gate-prompt")}</Redirect>));
+  return res.type("text/xml").status(200).send(twimlResponse(<Redirect method="POST">${absUrl(req, "/exam-prompt?mode=m1")}</Redirect>));
 });
 
 // M2 (highest-risk)
@@ -455,14 +498,69 @@ app.post("/m2-gate-prompt", (req, res) => {
 });
 app.post("/m2-gate", (req, res) => {
   const pass = (req.body.Digits || "").trim() === "7";
-  if (!pass) return res.type("text/xml").status(200).send(twimlResponse(`${say("Gate not confirmed.")}<Redirect method="POST">${absUrl(req, "/m2-gate-prompt")}</Redirect>`));
-  return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${absUrl(req, "/difficulty-prompt?mode=m2")}</Redirect>`));
+  if (!pass) return res.type("text/xml").status(200).send(twimlResponse(${say("Gate not confirmed.")}<Redirect method="POST">${absUrl(req, "/m2-gate-prompt")}</Redirect>));
+  return res.type("text/xml").status(200).send(twimlResponse(<Redirect method="POST">${absUrl(req, "/exam-prompt?mode=m2")}</Redirect>));
+});
+
+// =========================================================
+// Practice vs Exam (DTMF must happen BEFORE <Connect><Stream>)
+// =========================================================
+app.post("/exam-prompt", (req, res) => {
+  const mode = (req.query.mode || "").trim().toLowerCase();
+  const action = absUrl(req, /exam?mode=${encodeURIComponent(mode)});
+
+  const inner = gatherOneDigit({
+    action,
+    promptText: "Select mode. Press 1 for Practice. Press 2 for Exam.",
+    invalidText: "Invalid. Press 1 for Practice. Press 2 for Exam."
+  });
+
+  res.type("text/xml").status(200).send(twimlResponse(inner));
+});
+
+app.post("/exam", (req, res) => {
+  const callSid = req.body.CallSid;
+  const from = req.body.From || "";
+  const mode = (req.query.mode || "").trim().toLowerCase();
+  const digit = (req.body.Digits || "").trim();
+
+  if (!["mcd", "m1", "m2"].includes(mode)) {
+    return res.type("text/xml").status(200).send(
+      twimlResponse(${say("Invalid mode.")}<Redirect method="POST">${absUrl(req, "/voice")}</Redirect>)
+    );
+  }
+
+  const examMode = digit === "2";
+  if (digit !== "1" && digit !== "2") {
+    return res.type("text/xml").status(200).send(
+      twimlResponse(${say("Invalid selection.")}<Redirect method="POST">${absUrl(req, /exam-prompt?mode=${encodeURIComponent(mode)})}</Redirect>)
+    );
+  }
+
+  const st = getOrInitState(callSid);
+  st.from = from;
+  st.mode = mode;
+  st.examMode = examMode;
+
+  if (examMode) {
+    const key = ${todayKey()}:${from}:${mode};
+    if (EXAM_ATTEMPTS.has(key)) {
+      return res.type("text/xml").status(200).send(
+        twimlResponse(${say("Exam already taken today for this module. Practice mode is available.")}<Redirect method="POST">${absUrl(req, /exam-prompt?mode=${encodeURIComponent(mode)})}</Redirect>)
+      );
+    }
+    EXAM_ATTEMPTS.set(key, { ts: Date.now(), callSid });
+  }
+
+  return res.type("text/xml").status(200).send(
+    twimlResponse(<Redirect method="POST">${absUrl(req, /difficulty-prompt?mode=${encodeURIComponent(mode)})}</Redirect>)
+  );
 });
 
 // Difficulty selection
 app.post("/difficulty-prompt", (req, res) => {
   const mode = (req.query.mode || "").trim();
-  const action = absUrl(req, `/difficulty?mode=${encodeURIComponent(mode)}`);
+  const action = absUrl(req, /difficulty?mode=${encodeURIComponent(mode)});
   const inner = gatherOneDigit({
     action,
     promptText: "Select difficulty. Press 1 for Standard. Press 2 for Moderate. Press 3 for Edge.",
@@ -482,19 +580,25 @@ app.post("/difficulty", (req, res) => {
     digit === "3" ? "Edge" : null;
 
   if (!difficulty || !["mcd", "m1", "m2"].includes(mode)) {
-    const retry = absUrl(req, `/difficulty-prompt?mode=${encodeURIComponent(mode)}`);
-    return res.type("text/xml").status(200).send(twimlResponse(`${say("Invalid selection.")}<Redirect method="POST">${retry}</Redirect>`));
+    const retry = absUrl(req, /difficulty-prompt?mode=${encodeURIComponent(mode)});
+    return res.type("text/xml").status(200).send(twimlResponse(${say("Invalid selection.")}<Redirect method="POST">${retry}</Redirect>));
   }
 
   const scenario = pickScenario(mode, difficulty);
   if (!scenario) {
     return res.type("text/xml").status(200).send(
-      twimlResponse(`${say("No scenarios available.")}<Redirect method="POST">${absUrl(req, "/voice")}</Redirect>`)
+      twimlResponse(${say("No scenarios available.")}<Redirect method="POST">${absUrl(req, "/voice")}</Redirect>)
     );
   }
 
-  const { style, rng } = chooseStyleForCall({ callSid: sid, scenario, difficulty });
-  const borrowerMeta = resolveBorrowerMeta({ scenario, style, rng });
+  // Store scenario metadata for Scorecard + Exam Mode
+  const st = getOrInitState(sid);
+  st.mode = mode;
+  st.difficulty = difficulty;
+  st.scenarioId = scenario.id;
+  st.ruleFocus = scenario.ruleFocus || [];
+  st.baitType = scenario.baitType || "";
+  st.requiredOutcome = scenario.requiredOutcome || "";
 
   console.log(JSON.stringify({
     event: "SCENARIO_LOADED",
@@ -504,21 +608,73 @@ app.post("/difficulty", (req, res) => {
     scenarioId: scenario.id,
     borrowerName: scenario.borrowerName,
     borrowerGender: scenario.borrowerGender,
-    borrowerMeta
+    ruleFocus: st.ruleFocus,
+    baitType: st.baitType
   }));
 
+  // Scenario brief stays here, then user chooses Connect vs Scorecard (DTMF works here)
+  const inner = 
+    ${say(Scenario. ${String(scenario.summary || "")})}
+    ${say(Primary objective. ${String(scenario.objective || "")})}
+    ${say("Press 1 to connect. Press 9 to end and hear your scorecard.")}
+
+    <Gather input="dtmf" numDigits="1" action="${absUrl(req, "/connect")}" method="POST" timeout="8">
+      ${say("Make your selection now.")}
+    </Gather>
+
+    ${say("No input received. Press 1 to connect. Press 9 for scorecard.")}
+    <Redirect method="POST">${absUrl(req, "/connect")}</Redirect>
+  ;
+
+  res.type("text/xml").status(200).send(twimlResponse(inner));
+});
+
+// Connect or Scorecard (DTMF must happen BEFORE streaming)
+app.post("/connect", (req, res) => {
+  const sid = req.body.CallSid;
+  const digit = (req.body.Digits || "").trim();
+  const st = getOrInitState(sid);
+
+  if (digit === "9") {
+    st.endedAt = Date.now();
+    return res.type("text/xml").status(200).send(
+      twimlResponse(<Redirect method="POST">${absUrl(req, "/score")}</Redirect>)
+    );
+  }
+
+  if (digit !== "1") {
+    return res.type("text/xml").status(200).send(
+      twimlResponse(${say("Invalid selection.")}<Redirect method="POST">${absUrl(req, "/voice")}</Redirect>)
+    );
+    );
+  }
+
+  // Build stream URL
   const host = (req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
   const streamUrl = `wss://${host}/twilio`;
 
+  // Retrieve the scenario object again (authoritative) using stored state
+  const list = (SCENARIOS?.[st.mode]?.[st.difficulty]) || [];
+  const scenario = list.find((s) => String(s.id) === String(st.scenarioId)) || null;
+
+  if (!scenario) {
+    addViolation(sid, "SCENARIO_MISSING", "Scenario not found at connect time.");
+    return res.type("text/xml").status(200).send(
+      twimlResponse(`${say("Scenario missing. Returning to main menu.")}<Redirect method="POST">${absUrl(req, "/voice")}</Redirect>`)
+    );
+  }
+
+  // Choose borrower style deterministically by CallSid (consistent per call)
+  const { style, rng } = chooseStyleForCall({ callSid: sid, scenario, difficulty: st.difficulty });
+  const borrowerMeta = resolveBorrowerMeta({ scenario, style, rng });
+
   const inner = `
-    ${say(`Scenario. ${String(scenario.summary || "")}`)}
-    ${say(`Primary objective. ${String(scenario.objective || "")}`)}
-    ${say("You are now connected. The borrower will speak first.")}
+    ${say("Connecting now. The borrower will speak first.")}
 
     <Connect>
       <Stream url="${streamUrl}">
-        <Parameter name="mode" value="${xmlEscape(mode)}" />
-        <Parameter name="difficulty" value="${xmlEscape(difficulty)}" />
+        <Parameter name="mode" value="${xmlEscape(st.mode)}" />
+        <Parameter name="difficulty" value="${xmlEscape(st.difficulty)}" />
         <Parameter name="scenarioId" value="${xmlEscape(scenario.id)}" />
 
         <Parameter name="borrowerName" value="${xmlEscape(scenario.borrowerName)}" />
@@ -533,8 +689,43 @@ app.post("/difficulty", (req, res) => {
         <Parameter name="disfluency" value="${xmlEscape(borrowerMeta.disfluency)}" />
         <Parameter name="thinkDelayMin" value="${xmlEscape(borrowerMeta.thinkDelayMin)}" />
         <Parameter name="thinkDelayMax" value="${xmlEscape(borrowerMeta.thinkDelayMax)}" />
+
+        <Parameter name="examMode" value="${xmlEscape(st.examMode ? "true" : "false")}" />
       </Stream>
     </Connect>
+  `;
+
+  res.type("text/xml").status(200).send(twimlResponse(inner));
+});
+
+// =========================================================
+// Scorecard (spoken) — post-call only
+// =========================================================
+app.post("/score", (req, res) => {
+  const sid = req.body.CallSid;
+  const st = getOrInitState(sid);
+  const score = computeScore(sid);
+
+  const rf = (st.ruleFocus || []).length ? st.ruleFocus.join(", ") : "none";
+  const verdict = score.pass ? "PASS" : "FAIL";
+
+  const v1 = score.violations[0] ? score.violations[0].code : "";
+  const v2 = score.violations[1] ? score.violations[1].code : "";
+
+  const inner = `
+    ${say("Scorecard.")}
+    ${say(`Mode ${st.mode}. Difficulty ${st.difficulty}. Scenario I D. ${st.scenarioId}.`)}
+    ${say(`Rule focus. ${rf}.`)}
+    ${say(`Result. ${verdict}.`)}
+
+    ${score.tripwireCount > 0 ? say(`Tripwire triggered. ${score.tripwireCount}.`) : ""}
+
+    ${v1 ? say(`Violation 1. ${v1}.`) : say("No violations recorded.")}
+    ${v2 ? say(`Violation 2. ${v2}.`) : ""}
+
+    ${say(coachingDirective(st))}
+    ${say("End of scorecard. Goodbye.")}
+    <Hangup/>
   `;
 
   res.type("text/xml").status(200).send(twimlResponse(inner));
@@ -544,9 +735,7 @@ app.post("/difficulty", (req, res) => {
 // OpenAI Realtime: connect + configure
 // =========================================================
 function sendSessionUpdate(openaiWs, state) {
-  const {
-    mode, difficulty, scenario, borrowerName, borrowerGender, borrowerMeta
-  } = state;
+  const { mode, difficulty, scenario, borrowerName, borrowerGender, borrowerMeta } = state;
 
   openaiWs.send(JSON.stringify({
     type: "session.update",
@@ -572,7 +761,7 @@ function sendSessionUpdate(openaiWs, state) {
 
 function sendBorrowerFirst(openaiWs, borrowerName, mode) {
   const m2Tone = String(mode).toLowerCase() === "m2"
-    ? ' Sound slightly cautious and guarded.'
+    ? " Sound slightly cautious and guarded."
     : "";
 
   openaiWs.send(JSON.stringify({
@@ -635,7 +824,8 @@ wss.on("connection", (twilioWs) => {
       disfluency: "low",
       thinkDelayMin: 160,
       thinkDelayMax: 320
-    }
+    },
+    examMode: false
   };
 
   // OpenAI WS
@@ -659,10 +849,7 @@ wss.on("connection", (twilioWs) => {
   let pendingResponseTimer = null;
   let awaitingModelResponse = false;
 
-  // Epoch gating:
-  // - Each time we create a response, we increment activeEpoch
-  // - We only accept audio/text output if evtEpoch === activeEpoch
-  // Since OpenAI doesn’t guarantee an explicit response_id in all deltas, we gate by our own epoch.
+  // Epoch gating
   let activeEpoch = 0;
   let acceptEpoch = 0;
 
@@ -743,7 +930,6 @@ wss.on("connection", (twilioWs) => {
     outQueueBytes = 0;
   }
 
-  // Pop exact 160-byte frame (never partial)
   function popFrame160() {
     if (outQueueBytes < FRAME_BYTES) return null;
     let frame = Buffer.alloc(0);
@@ -778,14 +964,12 @@ wss.on("connection", (twilioWs) => {
     } catch {}
   }
 
-  // Strict 20ms sender with prebuffer + silence on underflow
   function startSendTimer() {
     if (sendTimer) return;
 
     sendTimer = setInterval(() => {
       if (!streamSid) return;
 
-      // prime jitter buffer before first playback
       if (!playbackStarted) {
         if (outQueueBytes >= PREBUFFER_BYTES) {
           playbackStarted = true;
@@ -798,7 +982,6 @@ wss.on("connection", (twilioWs) => {
       const frame = popFrame160();
       if (frame) return sendFrameToTwilio(frame);
 
-      // Underflow: keep Twilio clock stable (reduces pops for many setups)
       underflowTicks++;
       if (SEND_SILENCE_ON_UNDERFLOW) {
         sendFrameToTwilio(Buffer.alloc(FRAME_BYTES, ULAW_SILENCE_BYTE));
@@ -806,7 +989,6 @@ wss.on("connection", (twilioWs) => {
     }, SEND_TICK_MS);
   }
 
-  // Barge-in: emergency brake
   function onUserBargeIn() {
     if (pendingResponseTimer) {
       clearTimeout(pendingResponseTimer);
@@ -817,16 +999,14 @@ wss.on("connection", (twilioWs) => {
     twilioClear();
     flushOutputQueue();
 
-    // epoch bumps so we ignore any late model deltas
     activeEpoch++;
-    acceptEpoch = activeEpoch + 1; // block output until next response.create sets acceptEpoch properly
+    acceptEpoch = activeEpoch + 1;
     awaitingModelResponse = false;
     playbackStarted = false;
 
     log("BARGE_IN", { activeEpoch, acceptEpoch });
   }
 
-  // Schedule model response after user stops speaking (human timing)
   function scheduleBorrowerResponse() {
     if (awaitingModelResponse) return;
 
@@ -843,7 +1023,6 @@ wss.on("connection", (twilioWs) => {
       pendingResponseTimer = null;
       awaitingModelResponse = true;
 
-      // Now we want to accept output for THIS epoch
       acceptEpoch = activeEpoch;
 
       safeOpenAISend({
@@ -863,7 +1042,7 @@ wss.on("connection", (twilioWs) => {
     }, delay);
   }
 
-  // Tripwire: cancel + clear + reset identity
+  // Tripwire: Exam mode = HARD FAIL, Practice = reset & continue
   function triggerRoleDriftTripwire(reason, snippet) {
     const now = Date.now();
     if (now - lastTripwireMs < TRIPWIRE_COOLDOWN_MS) return;
@@ -871,10 +1050,22 @@ wss.on("connection", (twilioWs) => {
 
     log("ROLE_DRIFT_TRIPWIRE", { reason, snippet });
 
-    // Emergency brake
-    onUserBargeIn();
+    const st = callSid ? getOrInitState(callSid) : null;
+    if (st) {
+      st.tripwireCount++;
+      addViolation(callSid, "ROLE_DRIFT", snippet);
+    }
 
-    // Re-lock the session + re-anchor borrower identity
+    if (state.examMode) {
+      // HARD FAIL: stop the model and clear audio; do NOT reset and continue
+      onUserBargeIn();
+      // Optional: close sockets to end quickly
+      // closeBoth();
+      return;
+    }
+
+    // Practice mode: emergency brake + reset role
+    onUserBargeIn();
     try {
       sendSessionUpdate(openaiWs, state);
       safeOpenAISend({
@@ -903,8 +1094,17 @@ wss.on("connection", (twilioWs) => {
       state.scenarioId = cp.scenarioId || "";
       state.borrowerName = cp.borrowerName || "Steve";
       state.borrowerGender = cp.borrowerGender || "";
+      state.examMode = String(cp.examMode || "false") === "true";
 
-      // Borrower meta from Twilio params
+      // Sync into CALL_STATE too (for scorecard)
+      if (callSid) {
+        const st = getOrInitState(callSid);
+        st.mode = state.mode;
+        st.difficulty = state.difficulty;
+        st.scenarioId = state.scenarioId;
+        st.examMode = state.examMode;
+      }
+
       state.borrowerMeta = {
         style: cp.style || "calm",
         emotion: cp.emotion || "calm",
@@ -917,11 +1117,17 @@ wss.on("connection", (twilioWs) => {
         thinkDelayMax: parseInt(cp.thinkDelayMax || "320", 10)
       };
 
-      // Find scenario object for instructions/logging (authoritative)
-      // If it’s missing, we still proceed with minimal scenario context.
       try {
         const list = (SCENARIOS?.[state.mode]?.[state.difficulty]) || [];
         state.scenario = list.find((s) => String(s.id) === String(state.scenarioId)) || null;
+
+        // Pull ruleFocus into call-state for scorecard
+        if (callSid) {
+          const st = getOrInitState(callSid);
+          st.ruleFocus = state.scenario?.ruleFocus || st.ruleFocus || [];
+          st.baitType = state.scenario?.baitType || st.baitType || "";
+          st.requiredOutcome = state.scenario?.requiredOutcome || st.requiredOutcome || "";
+        }
       } catch {
         state.scenario = null;
       }
@@ -959,11 +1165,9 @@ wss.on("connection", (twilioWs) => {
           let evt;
           try { evt = JSON.parse(raw.toString("utf8")); } catch { return; }
 
-          // VAD events -> barge-in / schedule response
           if (evt.type === "input_audio_buffer.speech_started") return onUserBargeIn();
           if (evt.type === "input_audio_buffer.speech_stopped") return scheduleBorrowerResponse();
 
-          // Errors (log + attempt re-lock if modalities issue)
           if (evt.type === "error") {
             log("OPENAI_EVT_ERROR", { detail: evt.error || evt });
 
@@ -979,13 +1183,10 @@ wss.on("connection", (twilioWs) => {
             return;
           }
 
-          // Text output (for drift detection + audit logs)
-          // Different realtime models may emit different event types; we handle common ones.
           if (evt.type === "response.output_text.delta" && evt.delta) {
             rollingModelText += evt.delta;
             if (rollingModelText.length > 1200) rollingModelText = rollingModelText.slice(-1200);
 
-            // Tripwire check
             if (hasRoleDrift(rollingModelText)) {
               triggerRoleDriftTripwire("pattern_match", rollingModelText.slice(-220));
               rollingModelText = "";
@@ -993,13 +1194,11 @@ wss.on("connection", (twilioWs) => {
             return;
           }
 
-          // Mark response completion to allow new scheduling
           if (evt.type === "response.completed" || evt.type === "response.done") {
             awaitingModelResponse = false;
             return;
           }
 
-          // Audio deltas (accept only if epoch is permitted)
           const delta =
             (evt.type === "response.audio.delta" && evt.delta) ? evt.delta :
             (evt.type === "response.output_audio.delta" && evt.delta) ? evt.delta :
@@ -1007,7 +1206,6 @@ wss.on("connection", (twilioWs) => {
             null;
 
           if (delta) {
-            // If we are gating output (post-barge-in) ignore late deltas
             if (acceptEpoch !== activeEpoch) return;
 
             awaitingModelResponse = false;
@@ -1031,7 +1229,6 @@ wss.on("connection", (twilioWs) => {
       const payload = data.media?.payload;
       if (!payload) return;
 
-      // Buffer until OpenAI open
       if (!openaiWs || openaiWs.readyState !== 1) {
         bufferInboundAudio(payload);
         return;
@@ -1042,6 +1239,12 @@ wss.on("connection", (twilioWs) => {
     }
 
     if (data.event === "stop") {
+      // Store underflow in call-state for scorecard
+      if (callSid) {
+        const st = getOrInitState(callSid);
+        st.underflowTicks = underflowTicks;
+      }
+
       log("TWILIO_STREAM_STOP", { underflowTicks, sentFrames });
       closeBoth();
       return;
