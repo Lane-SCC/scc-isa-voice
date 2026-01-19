@@ -1,14 +1,21 @@
 /* SCC ISA Training Voice System (Governance-First)
- * server.js — v5.1 "Scorecard + Exam Mode"
+ * server.js — v5.2 "Static Fix + Session-Ready Gate + Response Guard"
  *
- * Adds (without destabilizing audio layer):
+ * Fixes included:
+ * ✅ Temperature min enforced by model (>= 0.6) — prevents session.update rejection
+ * ✅ Wait for session.created/session.updated confirming g711_ulaw BEFORE:
+ *    - starting Twilio playback timer
+ *    - flushing inbound audio buffer
+ *    - sending borrower-first response
+ * ✅ Response concurrency guard (prevents "conversation already has active response")
+ * ✅ Barge-in cancel is tolerant (ignore response_cancel_not_active)
+ *
+ * Keeps:
  * ✅ Practice vs Exam selection BEFORE streaming
  * ✅ Exam lockout: 1 exam/day per phone number per module
  * ✅ Connect vs Scorecard choice BEFORE streaming
- * ✅ Scorecard endpoint (spoken) — PASS/FAIL + RuleFocus + violations + directive
- * ✅ Exam-mode tripwire = HARD FAIL (no reset)
- *
- * Keeps:
+ * ✅ Scorecard endpoint (spoken)
+ * ✅ Exam-mode drift tripwire = HARD FAIL (no reset)
  * ✅ OpenAI modalities ["audio","text"]
  * ✅ Strict 20ms μ-law framing + jitter prebuffer
  * ✅ Epoch gating
@@ -45,7 +52,7 @@ const REALTIME_MODEL = process.env.REALTIME_MODEL || "gpt-realtime-mini";
 const OPENAI_URL = (model) =>
   `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
 
-// Your logs: supported combos are ["text"] or ["audio","text"]. Not ["audio"].
+// Supported: ["text"] or ["audio","text"]
 const OPENAI_MODALITIES = ["audio", "text"];
 
 // Twilio strict μ-law framing
@@ -68,11 +75,18 @@ const MAX_OUT_QUEUE_BYTES = FRAME_BYTES * Math.max(50, MAX_OUT_QUEUE_FRAMES);
 const MAX_INBOUND_BUFFER_FRAMES = parseInt(process.env.MAX_INBOUND_BUFFER_FRAMES || "50", 10); // ~1s
 const MAX_INBOUND_BUFFER_BYTES = FRAME_BYTES * Math.max(10, MAX_INBOUND_BUFFER_FRAMES);
 
-// VAD tuning (stable defaults)
+// VAD tuning
 const VAD_THRESHOLD = parseFloat(process.env.VAD_THRESHOLD || "0.55");
 const VAD_PREFIX_MS = parseInt(process.env.VAD_PREFIX_MS || "240", 10);
 const VAD_SILENCE_MS = parseInt(process.env.VAD_SILENCE_MS || "360", 10);
 const VAD_IDLE_TIMEOUT_MS = parseInt(process.env.VAD_IDLE_TIMEOUT_MS || "15000", 10);
+
+// Model settings (must be >= 0.6 per your error)
+const MODEL_TEMPERATURE = parseFloat(process.env.MODEL_TEMPERATURE || "0.6");
+const MODEL_TEMPERATURE_CLAMPED = Math.max(
+  0.6,
+  Math.min(1.2, isFinite(MODEL_TEMPERATURE) ? MODEL_TEMPERATURE : 0.6)
+);
 
 // Narrator (Twilio <Say>)
 const NARRATOR_VOICE = "Google.en-US-Chirp3-HD-Aoede";
@@ -92,7 +106,6 @@ loadScenarios();
 
 // Anti-repeat per (mode + difficulty)
 const lastScenarioByKey = new Map();
-
 function pickScenario(mode, difficulty) {
   const list = (SCENARIOS?.[mode]?.[difficulty]) || [];
   if (!list.length) return null;
@@ -117,7 +130,6 @@ function pickScenario(mode, difficulty) {
 
 // =========================================================
 // In-memory call state (Pilot v1)
-// NOTE: resets on deploy/restart. Perfect for pre-pilot.
 // =========================================================
 const CALL_STATE = new Map(); // CallSid -> state
 const EXAM_ATTEMPTS = new Map(); // `${date}:${from}:${mode}` -> {ts, callSid}
@@ -179,7 +191,7 @@ function coachingDirective(st) {
 }
 
 // =========================================================
-// Helpers
+// Helpers (Twilio TwiML as strings — no JSX)
 // =========================================================
 function xmlEscape(s) {
   return String(s)
@@ -410,7 +422,7 @@ function hasRoleDrift(text) {
 // Health
 // =========================================================
 app.get("/", (_, res) => res.status(200).send("OK"));
-app.get("/version", (_, res) => res.status(200).send("scc-isa-voice v5.1 scorecard+exam"));
+app.get("/version", (_, res) => res.status(200).send("scc-isa-voice v5.2 session-ready static-fix"));
 
 // =========================================================
 // SCC Call Flow (DTMF menus + gates + exam + difficulty + connect/score)
@@ -769,7 +781,6 @@ app.post("/score", (req, res) => {
 
   res.type("text/xml").status(200).send(twimlResponse(inner));
 });
-
 // =========================================================
 // OpenAI Realtime: connect + configure
 // =========================================================
@@ -781,7 +792,7 @@ function sendSessionUpdate(openaiWs, state) {
     session: {
       modalities: OPENAI_MODALITIES,
       voice: pickBorrowerVoice(borrowerGender),
-      temperature: 0.2,
+      temperature: MODEL_TEMPERATURE_CLAMPED, // MUST be >= 0.6
       input_audio_format: "g711_ulaw",
       output_audio_format: "g711_ulaw",
       turn_detection: {
@@ -817,7 +828,12 @@ function sendBorrowerFirst(openaiWs, borrowerName, mode) {
   }));
 }
 
-function openaiRealtimeConnect(state) {
+/**
+ * IMPORTANT:
+ * - We DO NOT start playback, flush inbound audio, or send borrower-first
+ *   until we see session.created/session.updated confirming g711_ulaw.
+ */
+function openaiRealtimeConnect(state, handlers = {}) {
   const apiKey = requireEnv("OPENAI_API_KEY");
 
   const ws = new WSClient(OPENAI_URL(REALTIME_MODEL), {
@@ -828,8 +844,51 @@ function openaiRealtimeConnect(state) {
   });
 
   ws.on("open", () => {
+    if (handlers.onOpen) handlers.onOpen();
     sendSessionUpdate(ws, state);
-    sendBorrowerFirst(ws, state.borrowerName, state.mode);
+  });
+
+  ws.on("message", (raw) => {
+    let evt;
+    try { evt = JSON.parse(raw.toString("utf8")); } catch { return; }
+
+    // SESSION-READY GATE (prevents static)
+    if (evt.type === "session.created" || evt.type === "session.updated") {
+      const outFmt = evt.session?.output_audio_format;
+      const inFmt = evt.session?.input_audio_format;
+
+      console.log(JSON.stringify({
+        event: "OPENAI_SESSION_EVENT",
+        sid: state._logSid || null,
+        output_audio_format: outFmt,
+        input_audio_format: inFmt,
+        temperature: evt.session?.temperature,
+        model: evt.session?.model
+      }));
+
+      if (!state.openaiReady && outFmt === "g711_ulaw" && inFmt === "g711_ulaw") {
+        state.openaiReady = true;
+
+        if (!state.borrowerFirstSent) {
+          state.borrowerFirstSent = true;
+          sendBorrowerFirst(ws, state.borrowerName, state.mode);
+        }
+
+        if (handlers.onReady) handlers.onReady();
+      }
+
+      return;
+    }
+
+    if (handlers.onMessage) handlers.onMessage(evt);
+  });
+
+  ws.on("error", (err) => {
+    if (handlers.onError) handlers.onError(err);
+  });
+
+  ws.on("close", () => {
+    if (handlers.onClose) handlers.onClose();
   });
 
   return ws;
@@ -869,7 +928,14 @@ wss.on("connection", (twilioWs) => {
       thinkDelayMin: 160,
       thinkDelayMax: 320
     },
-    examMode: false
+    examMode: false,
+
+    // NEW: session-ready gate + borrower-first lock
+    openaiReady: false,
+    borrowerFirstSent: false,
+
+    // internal log helper
+    _logSid: null
   };
 
   // OpenAI WS
@@ -885,7 +951,7 @@ wss.on("connection", (twilioWs) => {
   let underflowTicks = 0;
   let sentFrames = 0;
 
-  // Inbound buffering until OpenAI WS open
+  // Inbound buffering until OpenAI ready
   let inboundAudioBuffer = [];
   let inboundAudioBytes = 0;
 
@@ -934,6 +1000,7 @@ wss.on("connection", (twilioWs) => {
 
   function openaiCancelResponse() {
     if (!openaiWs || openaiWs.readyState !== 1) return;
+    // tolerant (ignore response_cancel_not_active)
     try { openaiWs.send(JSON.stringify({ type: "response.cancel" })); } catch {}
   }
 
@@ -1016,6 +1083,7 @@ wss.on("connection", (twilioWs) => {
 
     sendTimer = setInterval(() => {
       if (!streamSid) return;
+      if (!state.openaiReady) return; // DO NOTHING until session confirms formats
 
       if (!playbackStarted) {
         if (outQueueBytes >= PREBUFFER_BYTES) {
@@ -1055,6 +1123,7 @@ wss.on("connection", (twilioWs) => {
   }
 
   function scheduleBorrowerResponse() {
+    if (!state.openaiReady) return;
     if (awaitingModelResponse) return;
 
     if (pendingResponseTimer) clearTimeout(pendingResponseTimer);
@@ -1068,8 +1137,11 @@ wss.on("connection", (twilioWs) => {
 
     pendingResponseTimer = setTimeout(() => {
       pendingResponseTimer = null;
-      awaitingModelResponse = true;
 
+      if (!state.openaiReady) return;
+      if (awaitingModelResponse) return;
+
+      awaitingModelResponse = true;
       acceptEpoch = activeEpoch;
 
       safeOpenAISend({
@@ -1088,7 +1160,6 @@ wss.on("connection", (twilioWs) => {
       log("OPENAI_RESPONSE_CREATE", { delayMs: delay, activeEpoch, acceptEpoch });
     }, delay);
   }
-
   function triggerRoleDriftTripwire(reason, snippet) {
     const now = Date.now();
     if (now - lastTripwireMs < TRIPWIRE_COOLDOWN_MS) return;
@@ -1102,21 +1173,23 @@ wss.on("connection", (twilioWs) => {
       addViolation(callSid, "ROLE_DRIFT", snippet);
     }
 
-    // Exam mode: HARD FAIL behavior = cancel, clear, no reset prompt
+    // Exam mode = HARD FAIL (no reset)
     onUserBargeIn();
     if (state.examMode) return;
 
-    // Practice mode: reset borrower role and continue
+    // Practice mode reset (only if session is ready)
     try {
-      sendSessionUpdate(openaiWs, state);
-      safeOpenAISend({
-        type: "response.create",
-        response: {
-          modalities: OPENAI_MODALITIES,
-          instructions:
-            `ROLE RESET. You are the borrower only. Say: "Sorry—I'm not sure. That's why I'm calling. This is ${state.borrowerName}." Then wait.`
-        }
-      });
+      if (state.openaiReady) {
+        sendSessionUpdate(openaiWs, state);
+        safeOpenAISend({
+          type: "response.create",
+          response: {
+            modalities: OPENAI_MODALITIES,
+            instructions:
+              `ROLE RESET. You are the borrower only. Say: "Sorry—I'm not sure. That's why I'm calling. This is ${state.borrowerName}." Then wait.`
+          }
+        });
+      }
     } catch {}
   }
 
@@ -1128,6 +1201,9 @@ wss.on("connection", (twilioWs) => {
     if (data.event === "start") {
       callSid = data.start?.callSid || null;
       streamSid = data.start?.streamSid || null;
+
+      state._logSid = callSid || null;
+
       const cp = data.start?.customParameters || {};
 
       state.mode = (cp.mode || "mcd").toLowerCase();
@@ -1137,6 +1213,7 @@ wss.on("connection", (twilioWs) => {
       state.borrowerGender = cp.borrowerGender || "";
       state.examMode = String(cp.examMode || "false") === "true";
 
+      // update call state for scorecard
       if (callSid) {
         const st = getOrInitState(callSid);
         st.mode = state.mode;
@@ -1157,6 +1234,7 @@ wss.on("connection", (twilioWs) => {
         thinkDelayMax: parseInt(cp.thinkDelayMax || "320", 10)
       };
 
+      // load full scenario for role lock + ruleFocus capture
       try {
         const list = (SCENARIOS?.[state.mode]?.[state.difficulty]) || [];
         state.scenario = list.find((s) => String(s.id) === String(state.scenarioId)) || null;
@@ -1173,45 +1251,34 @@ wss.on("connection", (twilioWs) => {
 
       log("TWILIO_STREAM_START", { customParameters: cp });
 
-      try {
-        openaiWs = openaiRealtimeConnect({
-          mode: state.mode,
-          difficulty: state.difficulty,
-          scenario: state.scenario || { summary: "", objective: "" },
-          borrowerName: state.borrowerName,
-          borrowerGender: state.borrowerGender,
-          borrowerMeta: state.borrowerMeta
-        });
-
-        openaiWs.on("open", () => {
-          log("OPENAI_WS_OPEN", { model: REALTIME_MODEL });
-          log("OPENAI_SESSION_CONFIGURED");
+      // connect realtime
+      openaiWs = openaiRealtimeConnect(state, {
+        onOpen: () => log("OPENAI_WS_OPEN", { model: REALTIME_MODEL }),
+        onReady: () => {
+          log("OPENAI_READY_CONFIRMED");
           startSendTimer();
           flushInboundAudio();
-        });
-
-        openaiWs.on("error", (err) => {
+        },
+        onError: (err) => {
           log("OPENAI_WS_ERROR", { error: String(err?.message || err) });
           closeBoth();
-        });
-
-        openaiWs.on("close", () => {
+        },
+        onClose: () => {
           log("OPENAI_WS_CLOSE", { underflowTicks, sentFrames });
           closeBoth();
-        });
-
-        openaiWs.on("message", (raw) => {
-          let evt;
-          try { evt = JSON.parse(raw.toString("utf8")); } catch { return; }
-
+        },
+        onMessage: (evt) => {
+          // barge-in based on VAD
           if (evt.type === "input_audio_buffer.speech_started") return onUserBargeIn();
           if (evt.type === "input_audio_buffer.speech_stopped") return scheduleBorrowerResponse();
 
           if (evt.type === "error") {
             log("OPENAI_EVT_ERROR", { detail: evt.error || evt });
+            // keep running unless fatal; closeBoth handled by ws close/error
             return;
           }
 
+          // drift detection from text deltas
           if (evt.type === "response.output_text.delta" && evt.delta) {
             rollingModelText += evt.delta;
             if (rollingModelText.length > 1200) rollingModelText = rollingModelText.slice(-1200);
@@ -1223,11 +1290,17 @@ wss.on("connection", (twilioWs) => {
             return;
           }
 
+          // response lifecycle guard
+          if (evt.type === "response.created") {
+            awaitingModelResponse = true;
+            return;
+          }
           if (evt.type === "response.completed" || evt.type === "response.done") {
             awaitingModelResponse = false;
             return;
           }
 
+          // audio deltas (some models use different event names)
           const delta =
             (evt.type === "response.audio.delta" && evt.delta) ? evt.delta :
             (evt.type === "response.output_audio.delta" && evt.delta) ? evt.delta :
@@ -1236,7 +1309,6 @@ wss.on("connection", (twilioWs) => {
 
           if (delta) {
             if (acceptEpoch !== activeEpoch) return;
-
             awaitingModelResponse = false;
 
             const buf = Buffer.from(delta, "base64");
@@ -1244,12 +1316,9 @@ wss.on("connection", (twilioWs) => {
             outQueueBytes += buf.length;
             capOutQueue();
           }
-        });
+        }
+      });
 
-      } catch (err) {
-        log("OPENAI_INIT_FAILED", { error: String(err?.message || err) });
-        closeBoth();
-      }
       return;
     }
 
@@ -1257,7 +1326,8 @@ wss.on("connection", (twilioWs) => {
       const payload = data.media?.payload;
       if (!payload) return;
 
-      if (!openaiWs || openaiWs.readyState !== 1) {
+      // if not ready, buffer inbound until session confirms format
+      if (!state.openaiReady || !openaiWs || openaiWs.readyState !== 1) {
         bufferInboundAudio(payload);
         return;
       }
@@ -1271,22 +1341,18 @@ wss.on("connection", (twilioWs) => {
         const st = getOrInitState(callSid);
         st.underflowTicks = underflowTicks;
       }
-
       log("TWILIO_STREAM_STOP", { underflowTicks, sentFrames });
       closeBoth();
     }
   });
-
   twilioWs.on("close", () => {
     log("TWILIO_WS_CLOSE");
-    try { openaiWs && openaiWs.close(); } catch {}
-    stopSendTimer();
+    closeBoth();
   });
 
   twilioWs.on("error", (err) => {
     log("TWILIO_WS_ERROR", { error: String(err?.message || err) });
-    try { openaiWs && openaiWs.close(); } catch {}
-    stopSendTimer();
+    closeBoth();
   });
 });
 
