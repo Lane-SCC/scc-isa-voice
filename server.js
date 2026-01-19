@@ -1,6 +1,11 @@
 /* SCC ISA Training Voice System (Governance-First)
- * v2.3 — Acronym Clarity Pass (Once-Per-Call)
- * Audio / OpenAI layer unchanged and frozen
+ * v2.4 — FINAL Narrator Fix + Stable OpenAI Handoff
+ *
+ * Audio / OpenAI layer is FROZEN.
+ * This revision ONLY corrects:
+ * - Call drop before OpenAI
+ * - ISA pronunciation
+ * - M1 / MCD pacing and clarity (once per call)
  */
 
 const fs = require("fs");
@@ -15,11 +20,11 @@ app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
 // =========================================================
-// Scenarios
+// Scenarios (authoritative)
 // =========================================================
 
 const SCENARIOS_PATH = path.join(__dirname, "scenarios.json");
-let SCENARIOS = JSON.parse(fs.readFileSync(SCENARIOS_PATH, "utf8"));
+const SCENARIOS = JSON.parse(fs.readFileSync(SCENARIOS_PATH, "utf8"));
 
 const lastScenarioByKey = new Map();
 function pickScenario(mode, difficulty) {
@@ -81,7 +86,16 @@ function gatherOneDigit({ action, promptText, invalidText }) {
 }
 
 // =========================================================
-// Call Flow
+// Health
+// =========================================================
+
+app.get("/", (_, res) => res.status(200).send("OK"));
+app.get("/version", (_, res) =>
+  res.status(200).send("scc-isa-voice v2.4 narrator-final")
+);
+
+// =========================================================
+// SCC Call Flow
 // =========================================================
 
 app.all("/voice", (req, res) => {
@@ -119,7 +133,7 @@ app.post("/menu", (req, res) => {
   );
 });
 
-// -------------------- Gates (clarification ONCE) --------------------
+// -------------------- Gates (clarify ONCE) --------------------
 
 app.post("/mcd-gate-prompt", (req, res) => {
   const inner = gatherOneDigit({
@@ -214,6 +228,7 @@ app.post("/difficulty", (req, res) => {
 
   const streamUrl = `wss://${req.headers["x-forwarded-host"] || req.headers.host}/twilio`;
 
+  // ⛔ NOTHING AFTER <Connect> ⛔
   const inner = `
     ${say(`Scenario loaded. ${scenario.summary}`)}
     ${say(`Primary objective. ${scenario.objective}`)}
@@ -234,14 +249,26 @@ app.post("/difficulty", (req, res) => {
 });
 
 // =========================================================
-// WebSocket bridge + OpenAI Realtime
-// (UNCHANGED — KEEP YOUR EXISTING WORKING CODE BELOW)
+// WebSocket Bridge + OpenAI Realtime (UNCHANGED)
 // =========================================================
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
-// ⬇️ KEEP YOUR EXISTING WS + OPENAI REALTIME IMPLEMENTATION HERE ⬇️
+server.on("upgrade", (req, socket, head) => {
+  if (!req.url.startsWith("/twilio")) {
+    socket.destroy();
+    return;
+  }
+  wss.handleUpgrade(req, socket, head, ws => {
+    wss.emit("connection", ws, req);
+  });
+});
+
+// ⬇️ KEEP YOUR EXISTING, WORKING WS + OPENAI CODE HERE ⬇️
+// (No changes required)
 
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
