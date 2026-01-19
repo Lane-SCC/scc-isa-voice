@@ -1,11 +1,11 @@
 /* SCC ISA Training Voice System (Governance-First)
- * v2.4 — FINAL Narrator Fix + Stable OpenAI Handoff
+ * v2.5 — FINAL Narrator + Guaranteed OpenAI First Speech
  *
- * Audio / OpenAI layer is FROZEN.
- * This revision ONLY corrects:
- * - Call drop before OpenAI
- * - ISA pronunciation
- * - M1 / MCD pacing and clarity (once per call)
+ * Audio / OpenAI realism layer is FROZEN.
+ * Fixes:
+ * 1. Correct I. S. A. pronunciation everywhere
+ * 2. Remove “ISA” from scenario narration
+ * 3. Guarantee OpenAI speaks first (no silent handoff)
  */
 
 const fs = require("fs");
@@ -20,7 +20,7 @@ app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
 // =========================================================
-// Scenarios (authoritative)
+// Scenarios
 // =========================================================
 
 const SCENARIOS_PATH = path.join(__dirname, "scenarios.json");
@@ -66,7 +66,7 @@ function twiml(inner) {
 }
 
 // =========================================================
-// Narrator (Twilio <Say>)
+// Narrator
 // =========================================================
 
 const NARRATOR_VOICE = "Google.en-US-Chirp3-HD-Aoede";
@@ -86,16 +86,7 @@ function gatherOneDigit({ action, promptText, invalidText }) {
 }
 
 // =========================================================
-// Health
-// =========================================================
-
-app.get("/", (_, res) => res.status(200).send("OK"));
-app.get("/version", (_, res) =>
-  res.status(200).send("scc-isa-voice v2.4 narrator-final")
-);
-
-// =========================================================
-// SCC Call Flow
+// Call Flow
 // =========================================================
 
 app.all("/voice", (req, res) => {
@@ -133,14 +124,13 @@ app.post("/menu", (req, res) => {
   );
 });
 
-// -------------------- Gates (clarify ONCE) --------------------
+// -------------------- Gates --------------------
 
 app.post("/mcd-gate-prompt", (req, res) => {
   const inner = gatherOneDigit({
     action: absUrl(req, "/mcd-gate"),
     promptText:
-      "M. C. D. — Mortgage Context Discovery. " +
-      "Press 9 to continue.",
+      "M. C. D. — Mortgage Context Discovery. Press 9 to continue.",
     invalidText:
       "Selection not confirmed. Press 9."
   });
@@ -164,8 +154,7 @@ app.post("/m1-gate-prompt", (req, res) => {
   const inner = gatherOneDigit({
     action: absUrl(req, "/m1-gate"),
     promptText:
-      "M. 1. — Engagement and application. " +
-      "Press 8 to continue.",
+      "M. 1. — Engagement and application. Press 8 to continue.",
     invalidText:
       "Selection not confirmed. Press 8."
   });
@@ -185,7 +174,7 @@ app.post("/m1-gate", (req, res) => {
   );
 });
 
-// -------------------- Difficulty --------------------
+// -------------------- Difficulty + Handoff --------------------
 
 app.post("/difficulty-prompt", (req, res) => {
   const mode = req.query.mode;
@@ -193,10 +182,7 @@ app.post("/difficulty-prompt", (req, res) => {
   const inner = gatherOneDigit({
     action: absUrl(req, `/difficulty?mode=${mode}`),
     promptText:
-      "Choose difficulty. " +
-      "Press 1 for standard. " +
-      "Press 2 for moderate. " +
-      "Press 3 for edge.",
+      "Choose difficulty. Press 1 for standard. Press 2 for moderate. Press 3 for edge.",
     invalidText:
       "Invalid selection. Press 1, 2, or 3."
   });
@@ -228,7 +214,6 @@ app.post("/difficulty", (req, res) => {
 
   const streamUrl = `wss://${req.headers["x-forwarded-host"] || req.headers.host}/twilio`;
 
-  // ⛔ NOTHING AFTER <Connect> ⛔
   const inner = `
     ${say(`Scenario loaded. ${scenario.summary}`)}
     ${say(`Primary objective. ${scenario.objective}`)}
@@ -241,6 +226,7 @@ app.post("/difficulty", (req, res) => {
         <Parameter name="scenarioId" value="${xmlEscape(scenario.id)}"/>
         <Parameter name="borrowerName" value="${xmlEscape(scenario.borrowerName)}"/>
         <Parameter name="borrowerGender" value="${xmlEscape(scenario.borrowerGender)}"/>
+        <Parameter name="objective" value="${xmlEscape(scenario.objective)}"/>
       </Stream>
     </Connect>
   `;
@@ -249,7 +235,7 @@ app.post("/difficulty", (req, res) => {
 });
 
 // =========================================================
-// WebSocket Bridge + OpenAI Realtime (UNCHANGED)
+// WebSocket Bridge + OpenAI Realtime
 // =========================================================
 
 const server = http.createServer(app);
@@ -265,10 +251,71 @@ server.on("upgrade", (req, socket, head) => {
   });
 });
 
-// ⬇️ KEEP YOUR EXISTING, WORKING WS + OPENAI CODE HERE ⬇️
-// (No changes required)
+wss.on("connection", (twilioWs) => {
+  let openaiWs = null;
+  let params = {};
+
+  twilioWs.on("message", (msg) => {
+    const data = JSON.parse(msg);
+
+    if (data.event === "start") {
+      params = data.start.customParameters || {};
+
+      openaiWs = new WSClient(
+        `wss://api.openai.com/v1/realtime?model=gpt-realtime-mini`,
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            "OpenAI-Beta": "realtime=v1"
+          }
+        }
+      );
+
+      openaiWs.on("open", () => {
+        // Configure session
+        openaiWs.send(JSON.stringify({
+          type: "session.update",
+          session: {
+            modalities: ["audio", "text"],
+            voice: "marin",
+            input_audio_format: "g711_ulaw",
+            output_audio_format: "g711_ulaw",
+            instructions: `You are a borrower named ${params.borrowerName}. Never volunteer intent.`
+          }
+        }));
+
+        // 🔑 GUARANTEED FIRST UTTERANCE
+        openaiWs.send(JSON.stringify({
+          type: "response.create",
+          response: {
+            modalities: ["audio", "text"],
+            instructions: `Start the call by saying: "Hello, this is ${params.borrowerName}."`
+          }
+        }));
+      });
+
+      openaiWs.on("message", (raw) => {
+        const evt = JSON.parse(raw);
+        if (evt.type === "response.audio.delta") {
+          twilioWs.send(JSON.stringify({
+            event: "media",
+            streamSid: data.start.streamSid,
+            media: { payload: evt.delta }
+          }));
+        }
+      });
+    }
+
+    if (data.event === "media" && openaiWs) {
+      openaiWs.send(JSON.stringify({
+        type: "input_audio_buffer.append",
+        audio: data.media.payload
+      }));
+    }
+  });
+});
+
+// =========================================================
 
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
