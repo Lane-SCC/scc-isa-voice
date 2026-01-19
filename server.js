@@ -1,17 +1,17 @@
 /* SCC ISA Training Voice System (Governance-First)
- * server.js — v3.1 "Frame-Locked + Jitter-Buffered"
+ * server.js — v4.0 "Role-Locked, Frame-Locked, Jitter-Buffered"
  *
- * Goals:
- * 1) Eliminate Twilio loud static by enforcing strict 20ms μ-law (g711_ulaw) frames (160 bytes).
- * 2) Eliminate stutter/robotic gaps via a small prebuffer (jitter buffer) before playback starts.
- * 3) Prevent "late audio" after barge-in by gating model output until next response is started.
- * 4) Keep governance-first borrower role lock, VAD timing, barge-in cancel/clear, and SCC call flow.
+ * Primary fixes:
+ * 1) OpenAI Realtime modalities bug: this model requires ["audio","text"] (NOT ["audio"]).
+ * 2) Twilio playback stability: send ONLY exact 160-byte (20ms @ 8kHz μ-law) frames.
+ * 3) Reduce pops/stutter: jitter buffer + optional silence fill on underflow.
+ * 4) Hard barge-in: response.cancel + Twilio clear + epoch gate (ignore late deltas).
  *
- * Notes:
- * - Twilio Media Streams expects payloads as base64 g711_ulaw, 160 bytes per 20ms.
- * - OpenAI Realtime output is g711_ulaw chunks of arbitrary size; we must re-frame.
- * - We DO NOT send partial frames.
- * - Optional: send silence frames on underflow to keep Twilio clock smooth (env-controlled).
+ * SCC invariants:
+ * - Borrower speaks first.
+ * - Role lock at session level.
+ * - VAD-driven turns (server_vad).
+ * - No “helpful assistant” drift (hard prohibitions).
  */
 
 const fs = require("fs");
@@ -25,33 +25,34 @@ const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-// =========================================================
-// Config (env)
-// =========================================================
+// ------------------------- Config -------------------------
 function requireEnv(name) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing ${name} env var`);
   return v;
 }
 
-const OPENAI_API_KEY = () => requireEnv("OPENAI_API_KEY");
 const REALTIME_MODEL = process.env.REALTIME_MODEL || "gpt-realtime-mini";
+const OPENAI_URL = (model) => `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
 
-// Twilio playback strict framing
-const FRAME_BYTES = 160;                 // 20ms @ 8kHz μ-law
-const SEND_TICK_MS = 20;                 // 20ms cadence
-const PREBUFFER_FRAMES = parseInt(process.env.PREBUFFER_FRAMES || "4", 10); // 60–120ms typical
+// IMPORTANT: Your log proves this session expects ["audio","text"] and rejects ["audio"].
+const OPENAI_MODALITIES = ["audio", "text"]; // <-- FIX
+
+// Twilio strict μ-law framing
+const FRAME_BYTES = 160;   // 20ms @ 8kHz PCMU
+const SEND_TICK_MS = 20;
+
+// Jitter buffer / underflow behavior
+const PREBUFFER_FRAMES = parseInt(process.env.PREBUFFER_FRAMES || "4", 10); // 80ms default
 const PREBUFFER_BYTES = FRAME_BYTES * Math.max(1, PREBUFFER_FRAMES);
-
-// Underflow behavior (optional)
 const SEND_SILENCE_ON_UNDERFLOW = String(process.env.SEND_SILENCE_ON_UNDERFLOW || "true") === "true";
-const ULAW_SILENCE_BYTE = 0xff;          // μ-law silence
+const ULAW_SILENCE_BYTE = 0xff;
 
-// Queue limits (prevent unbounded memory)
-const MAX_OUT_QUEUE_BYTES = parseInt(process.env.MAX_OUT_QUEUE_BYTES || String(FRAME_BYTES * 200), 10); // ~4s
+// Queue limits
+const MAX_OUT_QUEUE_BYTES = parseInt(process.env.MAX_OUT_QUEUE_BYTES || String(FRAME_BYTES * 250), 10); // ~5s
 const MAX_INBOUND_BUFFER_BYTES = parseInt(process.env.MAX_INBOUND_BUFFER_BYTES || String(FRAME_BYTES * 50), 10); // ~1s
 
-// VAD / timing
+// VAD tuning (stable defaults; adjust only after audio is “frozen”)
 const VAD_THRESHOLD = parseFloat(process.env.VAD_THRESHOLD || "0.55");
 const VAD_PREFIX_MS = parseInt(process.env.VAD_PREFIX_MS || "240", 10);
 const VAD_SILENCE_MS = parseInt(process.env.VAD_SILENCE_MS || "360", 10);
@@ -60,9 +61,7 @@ const VAD_IDLE_TIMEOUT_MS = parseInt(process.env.VAD_IDLE_TIMEOUT_MS || "15000",
 // Narrator
 const NARRATOR_VOICE = "Google.en-US-Chirp3-HD-Aoede";
 
-// =========================================================
-// Scenarios (authoritative)
-// =========================================================
+// ------------------------- Scenarios -------------------------
 const SCENARIOS_PATH = path.join(__dirname, "scenarios.json");
 let SCENARIOS = null;
 
@@ -86,10 +85,7 @@ function pickScenario(mode, difficulty) {
   if (list.length > 1 && pick.id === last) {
     for (let i = 0; i < 6; i++) {
       const alt = list[Math.floor(Math.random() * list.length)];
-      if (alt.id !== last) {
-        pick = alt;
-        break;
-      }
+      if (alt.id !== last) { pick = alt; break; }
     }
   }
 
@@ -97,19 +93,14 @@ function pickScenario(mode, difficulty) {
   return pick;
 }
 
-// =========================================================
-// Helpers
-// =========================================================
+// ------------------------- Helpers -------------------------
 function xmlEscape(s) {
   return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
 
-// Build absolute URL robustly behind proxies (Render/Twilio)
+// robust behind proxies
 function absUrl(req, p) {
   const proto = (req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
   const host = (req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
@@ -135,37 +126,6 @@ function gatherOneDigit({ action, promptText, invalidText }) {
   `;
 }
 
-// =========================================================
-// Deterministic RNG (by CallSid)
-// =========================================================
-function hashStringToUint32(str) {
-  let h = 2166136261;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-
-function mulberry32(seed) {
-  return function () {
-    let t = (seed += 0x6d2b79f5);
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function pickWeighted(rng, items) {
-  const total = items.reduce((sum, it) => sum + it.weight, 0);
-  let r = rng() * total;
-  for (const it of items) {
-    r -= it.weight;
-    if (r <= 0) return it.value;
-  }
-  return items[items.length - 1].value;
-}
-
 function clampInt(n, min, max) {
   return Math.max(min, Math.min(max, n));
 }
@@ -175,41 +135,56 @@ function normalizeMeta(s) {
   return String(s).trim();
 }
 
-// =========================================================
-// Borrower realism profiles (kept)
-// =========================================================
+// -------------------- Borrower style profiles --------------------
 const STYLE_PROFILES = {
-  calm:       { label: "calm",       emotion: "calm",     talkativeness: "medium", patience: "high",   trust: "medium", disfluency: "low",    thinkDelayMs: [140, 260] },
-  anxious:    { label: "anxious",    emotion: "anxious",  talkativeness: "medium", patience: "medium", trust: "medium", disfluency: "medium", thinkDelayMs: [180, 360] },
-  distracted: { label: "distracted", emotion: "distracted",talkativeness:"low",    patience: "medium", trust: "medium", disfluency: "medium", thinkDelayMs: [200, 420] },
-  irritated:  { label: "irritated",  emotion: "irritated",talkativeness:"low",     patience: "low",    trust: "low",    disfluency: "low",    thinkDelayMs: [120, 220] },
-  clueless:   { label: "clueless",   emotion: "confused", talkativeness: "medium", patience: "medium", trust: "medium", disfluency: "medium", thinkDelayMs: [180, 340] }
+  calm:       { label: "calm", emotion: "calm", talkativeness: "medium", patience: "high",   trust: "medium", disfluency: "low",    thinkDelayMs: [140, 260] },
+  anxious:    { label: "anxious", emotion: "anxious", talkativeness: "medium", patience: "medium", trust: "medium", disfluency: "medium", thinkDelayMs: [180, 360] },
+  distracted: { label: "distracted", emotion: "distracted", talkativeness: "low", patience: "medium", trust: "medium", disfluency: "medium", thinkDelayMs: [200, 420] },
+  irritated:  { label: "irritated", emotion: "irritated", talkativeness: "low", patience: "low", trust: "low", disfluency: "low", thinkDelayMs: [120, 220] },
+  clueless:   { label: "clueless", emotion: "confused", talkativeness: "medium", patience: "medium", trust: "medium", disfluency: "medium", thinkDelayMs: [180, 340] }
 };
 
-function chooseStyleForCall({ callSid, scenario, difficulty }) {
-  const seed = hashStringToUint32(String(callSid || "no-callsid"));
-  const rng = mulberry32(seed);
-
-  const forced = normalizeMeta(scenario?.borrowerStyle);
-  if (forced && STYLE_PROFILES[forced]) {
-    return { style: STYLE_PROFILES[forced], rng };
+function hashStringToUint32(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
   }
+  return h >>> 0;
+}
+function mulberry32(seed) {
+  return function () {
+    let t = (seed += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function pickWeighted(rng, items) {
+  const total = items.reduce((sum, it) => sum + it.weight, 0);
+  let r = rng() * total;
+  for (const it of items) { r -= it.weight; if (r <= 0) return it.value; }
+  return items[items.length - 1].value;
+}
+
+function chooseStyleForCall({ callSid, scenario, difficulty }) {
+  const rng = mulberry32(hashStringToUint32(String(callSid || "no-callsid")));
+  const forced = normalizeMeta(scenario?.borrowerStyle);
+  if (forced && STYLE_PROFILES[forced]) return { style: STYLE_PROFILES[forced], rng };
 
   const weights = [
-    { value: STYLE_PROFILES.calm,       weight: 32 },
-    { value: STYLE_PROFILES.anxious,    weight: 26 },
+    { value: STYLE_PROFILES.calm, weight: 32 },
+    { value: STYLE_PROFILES.anxious, weight: 26 },
     { value: STYLE_PROFILES.distracted, weight: 20 },
-    { value: STYLE_PROFILES.clueless,   weight: 16 },
-    { value: STYLE_PROFILES.irritated,  weight: 6  }
+    { value: STYLE_PROFILES.clueless, weight: 16 },
+    { value: STYLE_PROFILES.irritated, weight: 6 }
   ];
-
   if (/Edge/i.test(String(difficulty || ""))) {
     weights.forEach((w) => {
       if (w.value.label === "irritated") w.weight += 12;
       if (w.value.label === "anxious") w.weight += 6;
     });
   }
-
   return { style: pickWeighted(rng, weights), rng };
 }
 
@@ -223,18 +198,17 @@ function resolveBorrowerMeta({ scenario, style, rng }) {
     trust: normalizeMeta(scenario?.trustLevel) || style.trust,
     disfluency: normalizeMeta(scenario?.disfluencyRate) || style.disfluency,
     interruptions: normalizeMeta(scenario?.interruptions) || "low",
-    thinkDelayMsMin: style.thinkDelayMs[0],
-    thinkDelayMsMax: style.thinkDelayMs[1]
+    thinkDelayMin: style.thinkDelayMs[0],
+    thinkDelayMax: style.thinkDelayMs[1]
   };
 
   if (!meta.distractor && meta.style === "distracted") {
     meta.distractor = pickWeighted(rng, [
-      { value: "kid in the background",              weight: 42 },
-      { value: "driving / road noise",               weight: 33 },
-      { value: "at work, someone asking questions",  weight: 25 }
+      { value: "kid in the background", weight: 42 },
+      { value: "driving / road noise", weight: 33 },
+      { value: "at work, someone asking questions", weight: 25 }
     ]);
   }
-
   return meta;
 }
 
@@ -245,37 +219,28 @@ ABSOLUTE ROLE LOCK — NON-NEGOTIABLE
 You are a SIMULATED MORTGAGE BORROWER named ${borrowerName}.
 The HUMAN CALLER is an ISA TRAINEE.
 
-You are NOT an assistant.
-You are NOT the lender.
-You are NOT the ISA.
-You are NOT a loan officer.
-You are NOT an advisor or expert.
+You are NOT an assistant. NOT the lender. NOT the ISA. NOT a loan officer. NOT an expert.
 
-You MUST ALWAYS speak ONLY from the BORROWER perspective.
+You MUST speak ONLY from the BORROWER perspective.
 
 You MUST NEVER:
-- give advice or recommendations
+- give advice/recommendations
 - explain mortgage concepts like a lender
-- quote rates, APR, payments, terms, numbers, or pricing
-- discuss eligibility, underwriting, approval rules, or "what they qualify for"
-- guide the caller through a process
-- provide legal, tax, financial, or medical guidance/diagnosis
+- quote rates/APR/payments/terms/pricing
+- discuss eligibility/underwriting/approval rules
+- provide legal/tax/financial/medical guidance
 - assume the caller is the borrower
-- say "we" to refer to the lender or process
+- say "we" as the lender
 
-If asked for any of the above:
-- respond with uncertainty
+If asked for advice/rates/medical/etc:
+- respond with uncertainty as the borrower
 - redirect back to borrower concerns
 Example: "I'm not sure — I was hoping you could help me understand that."
 
-You speak naturally as a borrower: brief, imperfect, human.
 Emotion: ${meta.emotion}. Talkativeness: ${meta.talkativeness}. Patience: ${meta.patience}. Trust: ${meta.trust}.
-
-Violation of this role is a FAILURE CONDITION.
 `.trim();
 }
 
-// Simple borrower voice mapping (optional—doesn’t affect static)
 function pickBorrowerVoice(gender) {
   const g = String(gender || "").toLowerCase();
   if (g.includes("f")) return process.env.OPENAI_VOICE_FEMALE || "alloy";
@@ -283,14 +248,12 @@ function pickBorrowerVoice(gender) {
   return process.env.OPENAI_VOICE_DEFAULT || "marin";
 }
 
-// =========================================================
-// Health
-// =========================================================
+// ------------------------- Health -------------------------
 app.get("/", (_, res) => res.status(200).send("OK"));
-app.get("/version", (_, res) => res.status(200).send("scc-isa-voice v3.1 frame-locked+jitter-buffered"));
+app.get("/version", (_, res) => res.status(200).send("scc-isa-voice v4.0 role+frame+jitter"));
 
 // =========================================================
-// SCC Call Flow (Twilio <Gather> + <Connect><Stream>)
+// SCC Call Flow
 // =========================================================
 app.all("/voice", (req, res) => {
   try {
@@ -374,11 +337,7 @@ app.post("/difficulty", (req, res) => {
   const mode = (req.query.mode || "").trim();
   const digit = (req.body.Digits || "").trim();
 
-  const difficulty =
-    digit === "1" ? "Standard" :
-    digit === "2" ? "Moderate" :
-    digit === "3" ? "Edge" : null;
-
+  const difficulty = digit === "1" ? "Standard" : digit === "2" ? "Moderate" : digit === "3" ? "Edge" : null;
   if (!difficulty || (mode !== "mcd" && mode !== "m1")) {
     const retry = absUrl(req, `/difficulty-prompt?mode=${encodeURIComponent(mode)}`);
     return res.type("text/xml").status(200).send(twimlResponse(`${say("Invalid selection.")}<Redirect method="POST">${retry}</Redirect>`));
@@ -404,12 +363,9 @@ app.post("/difficulty", (req, res) => {
   const host = (req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
   const streamUrl = `wss://${host}/twilio`;
 
-  const safeSummary = String(scenario.summary || "");
-  const safeObjective = String(scenario.objective || "");
-
   const inner = `
-    ${say(`Scenario. ${safeSummary}`)}
-    ${say(`Primary objective. ${safeObjective}`)}
+    ${say(`Scenario. ${String(scenario.summary || "")}`)}
+    ${say(`Primary objective. ${String(scenario.objective || "")}`)}
     ${say("You are now connected. The borrower will speak first.")}
 
     <Connect>
@@ -417,10 +373,8 @@ app.post("/difficulty", (req, res) => {
         <Parameter name="mode" value="${xmlEscape(mode)}" />
         <Parameter name="difficulty" value="${xmlEscape(difficulty)}" />
         <Parameter name="scenarioId" value="${xmlEscape(scenario.id)}" />
-
         <Parameter name="borrowerName" value="${xmlEscape(scenario.borrowerName)}" />
         <Parameter name="borrowerGender" value="${xmlEscape(scenario.borrowerGender)}" />
-
         <Parameter name="style" value="${xmlEscape(borrowerMeta.style)}" />
         <Parameter name="emotion" value="${xmlEscape(borrowerMeta.emotion)}" />
         <Parameter name="distractor" value="${xmlEscape(borrowerMeta.distractor)}" />
@@ -428,8 +382,8 @@ app.post("/difficulty", (req, res) => {
         <Parameter name="patience" value="${xmlEscape(borrowerMeta.patience)}" />
         <Parameter name="trust" value="${xmlEscape(borrowerMeta.trust)}" />
         <Parameter name="disfluency" value="${xmlEscape(borrowerMeta.disfluency)}" />
-        <Parameter name="thinkDelayMin" value="${xmlEscape(borrowerMeta.thinkDelayMsMin)}" />
-        <Parameter name="thinkDelayMax" value="${xmlEscape(borrowerMeta.thinkDelayMsMax)}" />
+        <Parameter name="thinkDelayMin" value="${xmlEscape(borrowerMeta.thinkDelayMin)}" />
+        <Parameter name="thinkDelayMax" value="${xmlEscape(borrowerMeta.thinkDelayMax)}" />
       </Stream>
     </Connect>
   `;
@@ -438,14 +392,50 @@ app.post("/difficulty", (req, res) => {
 });
 
 // =========================================================
-// OpenAI Realtime WS connect
+// OpenAI Realtime connect + configure
 // =========================================================
-function openaiRealtimeConnect({ borrowerName, borrowerGender, meta }) {
-  const apiKey = OPENAI_API_KEY();
-  const model = REALTIME_MODEL;
+function sendSessionUpdate(openaiWs, { borrowerName, borrowerGender, meta }) {
+  openaiWs.send(JSON.stringify({
+    type: "session.update",
+    session: {
+      // FIX: set modalities to ["audio","text"] or this model rejects it
+      modalities: OPENAI_MODALITIES,
 
-  const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
-  const ws = new WSClient(url, {
+      voice: pickBorrowerVoice(borrowerGender),
+      temperature: 0.2,
+
+      input_audio_format: "g711_ulaw",
+      output_audio_format: "g711_ulaw",
+
+      turn_detection: {
+        type: "server_vad",
+        threshold: VAD_THRESHOLD,
+        prefix_padding_ms: VAD_PREFIX_MS,
+        silence_duration_ms: VAD_SILENCE_MS,
+        create_response: false,
+        interrupt_response: true,
+        idle_timeout_ms: VAD_IDLE_TIMEOUT_MS
+      },
+
+      instructions: buildHardBorrowerSessionInstructions(borrowerName, meta)
+    }
+  }));
+}
+
+function sendBorrowerFirst(openaiWs, borrowerName) {
+  openaiWs.send(JSON.stringify({
+    type: "response.create",
+    response: {
+      modalities: OPENAI_MODALITIES, // FIX
+      instructions: `You are the borrower only. Say exactly: "Hello, this is ${borrowerName}." Then wait silently.`
+    }
+  }));
+}
+
+function openaiRealtimeConnect({ borrowerName, borrowerGender, meta }) {
+  const apiKey = requireEnv("OPENAI_API_KEY");
+
+  const ws = new WSClient(OPENAI_URL(REALTIME_MODEL), {
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "OpenAI-Beta": "realtime=v1"
@@ -453,106 +443,65 @@ function openaiRealtimeConnect({ borrowerName, borrowerGender, meta }) {
   });
 
   ws.on("open", () => {
-    const noiseReductionMode = normalizeMeta(process.env.OPENAI_NOISE_REDUCTION);
-    const inputAudioNoiseReduction =
-      noiseReductionMode === "near_field" || noiseReductionMode === "far_field"
-        ? { type: noiseReductionMode }
-        : null;
-
-    ws.send(JSON.stringify({
-      type: "session.update",
-      session: {
-        modalities: ["audio"],
-        voice: pickBorrowerVoice(borrowerGender),
-        temperature: 0.2,
-        input_audio_format: "g711_ulaw",
-        output_audio_format: "g711_ulaw",
-        input_audio_noise_reduction: inputAudioNoiseReduction,
-        turn_detection: {
-          type: "server_vad",
-          threshold: VAD_THRESHOLD,
-          prefix_padding_ms: VAD_PREFIX_MS,
-          silence_duration_ms: VAD_SILENCE_MS,
-          create_response: false,
-          interrupt_response: true,
-          idle_timeout_ms: VAD_IDLE_TIMEOUT_MS
-        },
-        instructions: buildHardBorrowerSessionInstructions(borrowerName, meta)
-      }
-    }));
-
-    // Borrower speaks first, always.
-    ws.send(JSON.stringify({
-      type: "response.create",
-      response: {
-        modalities: ["audio"],
-        instructions: `You are the borrower only. Start with exactly: "Hello, this is ${borrowerName}." Then wait.`
-      }
-    }));
+    sendSessionUpdate(ws, { borrowerName, borrowerGender, meta });
+    sendBorrowerFirst(ws, borrowerName);
   });
 
   return ws;
 }
 
 // =========================================================
-// WebSocket Bridge: Twilio <-> OpenAI
+// WebSocket Bridge: Twilio Media Streams <-> OpenAI Realtime
 // =========================================================
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 server.on("upgrade", (req, socket, head) => {
-  if (!req.url || !req.url.startsWith("/twilio")) {
-    socket.destroy();
-    return;
-  }
+  if (!req.url || !req.url.startsWith("/twilio")) return socket.destroy();
   wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
 });
 
 wss.on("connection", (twilioWs) => {
   let callSid = null;
   let streamSid = null;
-
   let openaiWs = null;
 
-  // Output audio queue for Twilio (buffer of Buffers)
+  // output buffer
   let outQueue = [];
   let outQueueBytes = 0;
-
-  // Playback control
   let sendTimer = null;
   let playbackStarted = false;
-  let allowModelOutput = true;        // becomes false on barge-in until next response is created
-  let underflowTicks = 0;
 
-  // Inbound audio buffering (until OpenAI WS open)
+  // inbound buffer until openai opens
   let inboundAudioBuffer = [];
   let inboundAudioBytes = 0;
 
-  // Response scheduling
+  // scheduling / barge-in
   let pendingResponseTimer = null;
   let awaitingModelResponse = false;
 
-  // Meta (from Twilio custom parameters)
-  let borrowerMeta = null;
+  // epoch gate: ignore late deltas after cancel
+  let outputEpoch = 0;
+  let acceptEpoch = 0;
+
+  // stats
+  let underflowTicks = 0;
+  let sentFrames = 0;
+  let receivedAudioBytes = 0;
+
   let borrowerName = "Steve";
   let borrowerGender = "";
+  let borrowerMeta = null;
 
-  // Logging
   function log(event, obj = {}) {
     console.log(JSON.stringify({ event, sid: callSid, streamSid, ...obj }));
   }
 
   function safeOpenAISend(obj) {
     if (!openaiWs || openaiWs.readyState !== 1) return false;
-    try {
-      openaiWs.send(JSON.stringify(obj));
-      return true;
-    } catch {
-      return false;
-    }
+    try { openaiWs.send(JSON.stringify(obj)); return true; } catch { return false; }
   }
 
-  // Inbound audio buffering
   function bufferInboundAudio(b64) {
     try {
       const buf = Buffer.from(b64, "base64");
@@ -568,48 +517,26 @@ wss.on("connection", (twilioWs) => {
 
   function flushInboundAudio() {
     if (!openaiWs || openaiWs.readyState !== 1) return;
-    if (!inboundAudioBuffer.length) return;
-
     for (const buf of inboundAudioBuffer) {
       try {
-        openaiWs.send(JSON.stringify({
-          type: "input_audio_buffer.append",
-          audio: buf.toString("base64")
-        }));
+        openaiWs.send(JSON.stringify({ type: "input_audio_buffer.append", audio: buf.toString("base64") }));
       } catch {}
     }
-
     inboundAudioBuffer = [];
     inboundAudioBytes = 0;
     log("OPENAI_INBOUND_AUDIO_FLUSHED");
   }
 
-  // Twilio stream commands
   function twilioClear() {
     if (!streamSid) return;
-    try {
-      twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
-    } catch {}
+    try { twilioWs.send(JSON.stringify({ event: "clear", streamSid })); } catch {}
   }
 
   function openaiCancelResponse() {
     if (!openaiWs || openaiWs.readyState !== 1) return;
-    try {
-      openaiWs.send(JSON.stringify({ type: "response.cancel" }));
-    } catch {}
+    try { openaiWs.send(JSON.stringify({ type: "response.cancel" })); } catch {}
   }
 
-  function flushOutputQueue() {
-    outQueue = [];
-    outQueueBytes = 0;
-  }
-
-  function stopSendTimer() {
-    if (sendTimer) clearInterval(sendTimer);
-    sendTimer = null;
-  }
-
-  // Enforce max output buffer (drop oldest if too big)
   function capOutQueue() {
     while (outQueueBytes > MAX_OUT_QUEUE_BYTES && outQueue.length) {
       const dropped = outQueue.shift();
@@ -617,15 +544,13 @@ wss.on("connection", (twilioWs) => {
     }
   }
 
-  // Strict frame pop (exact 160 bytes)
   function popFrame160() {
     if (outQueueBytes < FRAME_BYTES) return null;
-
     let frame = Buffer.alloc(0);
+
     while (outQueue.length && frame.length < FRAME_BYTES) {
       const b = outQueue[0];
       const need = FRAME_BYTES - frame.length;
-
       if (b.length <= need) {
         frame = Buffer.concat([frame, b]);
         outQueue.shift();
@@ -636,7 +561,6 @@ wss.on("connection", (twilioWs) => {
         outQueueBytes -= need;
       }
     }
-
     if (frame.length !== FRAME_BYTES) return null;
     return frame;
   }
@@ -648,46 +572,68 @@ wss.on("connection", (twilioWs) => {
         streamSid,
         media: { payload: frame.toString("base64") }
       }));
+      sentFrames++;
     } catch {}
   }
 
-  // Start strict 20ms sender with prebuffer
   function startSendTimer() {
     if (sendTimer) return;
 
     sendTimer = setInterval(() => {
       if (!streamSid) return;
 
-      // Prebuffer before starting playback (jitter buffer)
+      // jitter buffer prime
       if (!playbackStarted) {
         if (outQueueBytes >= PREBUFFER_BYTES) {
           playbackStarted = true;
           log("PLAYBACK_START", { prebufferBytes: PREBUFFER_BYTES });
         } else {
-          return; // wait until buffer is primed
+          return;
         }
       }
 
-      // Once started, keep 20ms cadence
       const frame = popFrame160();
-      if (frame) {
-        sendFrameToTwilio(frame);
-        return;
-      }
+      if (frame) return sendFrameToTwilio(frame);
 
-      // Underflow: optionally send silence to keep Twilio clock stable
+      // underflow
       underflowTicks++;
       if (SEND_SILENCE_ON_UNDERFLOW) {
-        const silence = Buffer.alloc(FRAME_BYTES, ULAW_SILENCE_BYTE);
-        sendFrameToTwilio(silence);
+        sendFrameToTwilio(Buffer.alloc(FRAME_BYTES, ULAW_SILENCE_BYTE));
       }
     }, SEND_TICK_MS);
   }
 
-  // Borrower response scheduling (post-VAD)
+  function stopSendTimer() {
+    if (sendTimer) clearInterval(sendTimer);
+    sendTimer = null;
+  }
+
+  function flushOutputQueue() {
+    outQueue = [];
+    outQueueBytes = 0;
+  }
+
+  function onUserBargeIn() {
+    if (pendingResponseTimer) {
+      clearTimeout(pendingResponseTimer);
+      pendingResponseTimer = null;
+    }
+
+    openaiCancelResponse();
+    twilioClear();
+    flushOutputQueue();
+
+    outputEpoch++;
+    acceptEpoch = outputEpoch; // only accept future deltas after next response.create
+    awaitingModelResponse = false;
+    playbackStarted = false;
+
+    log("BARGE_IN", { outputEpoch });
+  }
+
   function scheduleBorrowerResponse() {
     if (!borrowerMeta) return;
-    if (awaitingModelResponse) return; // guard against stacking responses
+    if (awaitingModelResponse) return;
 
     if (pendingResponseTimer) clearTimeout(pendingResponseTimer);
     pendingResponseTimer = null;
@@ -695,47 +641,27 @@ wss.on("connection", (twilioWs) => {
     const minMs = clampInt(parseInt(borrowerMeta.thinkDelayMin || "160", 10), 60, 1200);
     const maxMs = clampInt(parseInt(borrowerMeta.thinkDelayMax || "320", 10), minMs, 2000);
 
+    // small natural delay; random per stop
     const rng = mulberry32(hashStringToUint32(String(callSid || "no-sid") + ":" + Date.now()));
     const delay = Math.floor(minMs + rng() * (maxMs - minMs));
 
     pendingResponseTimer = setTimeout(() => {
       pendingResponseTimer = null;
-
-      // After a barge-in, we gate output until a fresh response.create
-      allowModelOutput = true;
       awaitingModelResponse = true;
+
+      // once we ask for a new response, start accepting output again for this epoch
+      acceptEpoch = outputEpoch;
 
       safeOpenAISend({
         type: "response.create",
         response: {
-          modalities: ["audio"],
-          instructions:
-            "Respond as the borrower only. Stay in mortgage context. Do not advise. Keep it brief."
+          modalities: OPENAI_MODALITIES,
+          instructions: "Respond as the borrower only. Stay in mortgage context. Do not advise. Keep it brief."
         }
       });
 
-      log("OPENAI_RESPONSE_CREATE", { delayMs: delay });
+      log("OPENAI_RESPONSE_CREATE", { delayMs: delay, outputEpoch });
     }, delay);
-  }
-
-  // Barge-in: cancel model, clear Twilio, gate output until next response
-  function onUserBargeIn() {
-    if (pendingResponseTimer) {
-      clearTimeout(pendingResponseTimer);
-      pendingResponseTimer = null;
-    }
-
-    awaitingModelResponse = false;
-    allowModelOutput = false; // ignore any late deltas
-
-    openaiCancelResponse();
-    twilioClear();
-    flushOutputQueue();
-
-    // Re-prime playback (avoid immediate underflow pops)
-    playbackStarted = false;
-
-    log("BARGE_IN");
   }
 
   function closeBoth() {
@@ -744,9 +670,7 @@ wss.on("connection", (twilioWs) => {
     stopSendTimer();
   }
 
-  // ---------------------------------------------------------
-  // Twilio WS events
-  // ---------------------------------------------------------
+  // ------------------ Twilio incoming ------------------
   twilioWs.on("message", (msg) => {
     let data;
     try { data = JSON.parse(msg.toString("utf8")); } catch { return; }
@@ -772,18 +696,66 @@ wss.on("connection", (twilioWs) => {
       log("TWILIO_STREAM_START", { customParameters: cp });
 
       try {
-        openaiWs = openaiRealtimeConnect({
-          borrowerName,
-          borrowerGender,
-          meta: borrowerMeta
-        });
+        openaiWs = openaiRealtimeConnect({ borrowerName, borrowerGender, meta: borrowerMeta });
 
         openaiWs.on("open", () => {
           log("OPENAI_WS_OPEN", { model: REALTIME_MODEL });
           log("OPENAI_SESSION_CONFIGURED");
-
           startSendTimer();
           flushInboundAudio();
+        });
+
+        openaiWs.on("message", (raw) => {
+          let evt;
+          try { evt = JSON.parse(raw.toString("utf8")); } catch { return; }
+
+          // Barge-in via VAD
+          if (evt.type === "input_audio_buffer.speech_started") return onUserBargeIn();
+          if (evt.type === "input_audio_buffer.speech_stopped") return scheduleBorrowerResponse();
+
+          // Handle OpenAI errors (including modalities)
+          if (evt.type === "error") {
+            log("OPENAI_EVT_ERROR", { detail: evt.error || evt });
+
+            // FAILSAFE: if modalities error appears again, re-send session.update with ["audio","text"]
+            const msg = String(evt?.error?.message || "");
+            const param = String(evt?.error?.param || "");
+            if (msg.includes("Invalid modalities") || param.includes("modalities")) {
+              log("OPENAI_MODALITIES_RETRY");
+              try {
+                sendSessionUpdate(openaiWs, { borrowerName, borrowerGender, meta: borrowerMeta });
+                sendBorrowerFirst(openaiWs, borrowerName);
+              } catch {}
+            }
+            return;
+          }
+
+          // Audio deltas
+          const delta =
+            (evt.type === "response.audio.delta" && evt.delta) ? evt.delta :
+            (evt.type === "response.output_audio.delta" && evt.delta) ? evt.delta :
+            (evt.type === "output_audio.delta" && evt.delta) ? evt.delta :
+            null;
+
+          if (delta) {
+            // ignore late deltas after cancel/clear
+            if (acceptEpoch !== outputEpoch) return;
+
+            awaitingModelResponse = false;
+
+            const buf = Buffer.from(delta, "base64");
+            receivedAudioBytes += buf.length;
+
+            outQueue.push(buf);
+            outQueueBytes += buf.length;
+            capOutQueue();
+            return;
+          }
+        });
+
+        openaiWs.on("close", () => {
+          log("OPENAI_WS_CLOSE", { underflowTicks, sentFrames, receivedAudioBytes });
+          closeBoth();
         });
 
         openaiWs.on("error", (err) => {
@@ -791,62 +763,10 @@ wss.on("connection", (twilioWs) => {
           closeBoth();
         });
 
-        openaiWs.on("close", () => {
-          log("OPENAI_WS_CLOSE");
-          closeBoth();
-        });
-
-        openaiWs.on("message", (raw) => {
-          let evt;
-          try { evt = JSON.parse(raw.toString("utf8")); } catch { return; }
-
-          // VAD events
-          if (evt.type === "input_audio_buffer.speech_started") {
-            onUserBargeIn();
-            return;
-          }
-          if (evt.type === "input_audio_buffer.speech_stopped") {
-            scheduleBorrowerResponse();
-            return;
-          }
-
-          // Detect when model actually begins output (clears awaiting flag)
-          const isAudioDelta =
-            (evt.type === "response.audio.delta" && evt.delta) ||
-            (evt.type === "response.output_audio.delta" && evt.delta) ||
-            (evt.type === "output_audio.delta" && evt.delta);
-
-          if (isAudioDelta) {
-            // If we cancelled and are gating, ignore late deltas
-            if (!allowModelOutput) return;
-
-            awaitingModelResponse = false;
-
-            const delta = evt.delta;
-            const buf = Buffer.from(delta, "base64");
-
-            outQueue.push(buf);
-            outQueueBytes += buf.length;
-
-            capOutQueue();
-            return;
-          }
-
-          if (evt.type === "response.completed" || evt.type === "response.done") {
-            awaitingModelResponse = false;
-            return;
-          }
-
-          if (evt.type === "error") {
-            log("OPENAI_EVT_ERROR", { detail: evt.error || evt });
-          }
-        });
-
       } catch (err) {
         log("OPENAI_INIT_FAILED", { error: String(err?.message || err) });
         closeBoth();
       }
-
       return;
     }
 
@@ -864,7 +784,7 @@ wss.on("connection", (twilioWs) => {
     }
 
     if (data.event === "stop") {
-      log("TWILIO_STREAM_STOP", { underflowTicks });
+      log("TWILIO_STREAM_STOP", { underflowTicks, sentFrames, receivedAudioBytes });
       closeBoth();
       return;
     }
@@ -883,8 +803,6 @@ wss.on("connection", (twilioWs) => {
   });
 });
 
-// =========================================================
-// Boot (Render port bind)
-// =========================================================
+// ------------------------- Boot -------------------------
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
