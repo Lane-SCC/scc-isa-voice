@@ -1,23 +1,16 @@
 /* SCC ISA Training Voice System (Governance-First)
- * v2.8 — Full call flow restored (M1 + MCD) + OpenAI stable + Borrower Role Lock
+ * v2.5.3 — Borrower Role Lock (fix lender swap) WITHOUT changing audio
  *
- * Fixes:
- * - Twilio "application error" on option 1/2: ALL routes exist and use absolute URLs
- * - OpenAI ws CONNECTING guard: no crash when Twilio audio arrives early
- * - Borrower role lock: borrower never acts like lender
- * - Borrower stays in scenario + pressures ISA to break guardrails (as borrower)
+ * Key fix:
+ * - DO NOT feed ISA-facing "objective" text into the model instructions.
+ *   Objective text is written for the ISA and causes role-swapping.
  *
- * Audio layer remains unchanged:
- * - VAD driven turn-taking
- * - response.cancel + Twilio clear barge-in
- * - micro-jitter batching of μ-law audio to reduce robotic gaps
- *
- * Required ENV:
- * - OPENAI_API_KEY
- *
- * Optional ENV:
- * - REALTIME_MODEL (default: gpt-realtime-mini)
- * - OPENAI_NOISE_REDUCTION (near_field | far_field)
+ * Keeps unchanged:
+ * - Barge-in: OpenAI response.cancel + Twilio clear
+ * - Micro-jitter buffer batching μ-law audio
+ * - VAD turn-taking with human think delay
+ * - CONNECTING guard (buffer Twilio audio until OpenAI WS open)
+ * - Render port binding
  */
 
 const fs = require("fs");
@@ -31,12 +24,7 @@ const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-// =========================================================
-// Scenarios (authoritative)
-// Expected schema:
-// SCENARIOS = { m1: { Standard: [..], Moderate: [..], Edge: [..] }, mcd: { ... } }
-// =========================================================
-
+// -------------------- Scenarios (authoritative) --------------------
 const SCENARIOS_PATH = path.join(__dirname, "scenarios.json");
 let SCENARIOS = null;
 
@@ -71,10 +59,7 @@ function pickScenario(mode, difficulty) {
   return pick;
 }
 
-// =========================================================
-// Helpers
-// =========================================================
-
+// -------------------- Helpers --------------------
 function xmlEscape(s) {
   return String(s)
     .replace(/&/g, "&amp;")
@@ -99,45 +84,7 @@ function requireEnv(name) {
   return v;
 }
 
-// =========================================================
-// Narrator (Twilio <Say>)
-// =========================================================
-
-const NARRATOR_VOICE = "Google.en-US-Chirp3-HD-Aoede";
-
-function say(text) {
-  // Force acronym pronunciation in any narrator line
-  const cleaned = String(text).replace(/\bISA\b/g, "I. S. A.");
-  return `<Say voice="${NARRATOR_VOICE}">${xmlEscape(cleaned)}</Say>`;
-}
-
-function gatherOneDigit({ action, promptText, invalidText }) {
-  return `
-    <Gather input="dtmf" numDigits="1" action="${action}" method="POST" timeout="8">
-      ${say(promptText)}
-    </Gather>
-    ${say(invalidText)}
-    <Redirect method="POST">${action}</Redirect>
-  `;
-}
-
-// =========================================================
-// Borrower realism profiles (unchanged)
-// =========================================================
-
-const STYLE_PROFILES = {
-  calm: { label: "calm", emotion: "calm", talkativeness: "medium", patience: "high", trust: "medium", disfluency: "low", thinkDelayMs: [140, 260] },
-  anxious: { label: "anxious", emotion: "anxious", talkativeness: "medium", patience: "medium", trust: "medium", disfluency: "medium", thinkDelayMs: [180, 360] },
-  distracted: { label: "distracted", emotion: "distracted", talkativeness: "low", patience: "medium", trust: "medium", disfluency: "medium", thinkDelayMs: [200, 420] },
-  irritated: { label: "irritated", emotion: "irritated", talkativeness: "low", patience: "low", trust: "low", disfluency: "low", thinkDelayMs: [120, 220] },
-  clueless: { label: "clueless", emotion: "confused", talkativeness: "medium", patience: "medium", trust: "medium", disfluency: "medium", thinkDelayMs: [180, 340] }
-};
-
-function normalizeMeta(s) {
-  if (s === undefined || s === null) return "";
-  return String(s).trim();
-}
-
+// -------------------- Deterministic RNG (by CallSid) --------------------
 function hashStringToUint32(str) {
   let h = 2166136261;
   for (let i = 0; i < str.length; i++) {
@@ -168,6 +115,39 @@ function pickWeighted(rng, items) {
 
 function clampInt(n, min, max) {
   return Math.max(min, Math.min(max, n));
+}
+
+// -------------------- Narrator (Twilio <Say>) --------------------
+const NARRATOR_VOICE = "Google.en-US-Chirp3-HD-Aoede";
+
+function say(text) {
+  // narrator pronunciation helper
+  const cleaned = String(text).replace(/\bISA\b/g, "I. S. A.");
+  return `<Say voice="${NARRATOR_VOICE}">${xmlEscape(cleaned)}</Say>`;
+}
+
+function gatherOneDigit({ action, promptText, invalidText }) {
+  return `
+    <Gather input="dtmf" numDigits="1" action="${action}" method="POST" timeout="8">
+      ${say(promptText)}
+    </Gather>
+    ${say(invalidText)}
+    <Redirect method="POST">${action}</Redirect>
+  `;
+}
+
+// -------------------- Borrower realism profiles --------------------
+const STYLE_PROFILES = {
+  calm: { label: "calm", emotion: "calm", talkativeness: "medium", patience: "high", trust: "medium", disfluency: "low", thinkDelayMs: [140, 260] },
+  anxious: { label: "anxious", emotion: "anxious", talkativeness: "medium", patience: "medium", trust: "medium", disfluency: "medium", thinkDelayMs: [180, 360] },
+  distracted: { label: "distracted", emotion: "distracted", talkativeness: "low", patience: "medium", trust: "medium", disfluency: "medium", thinkDelayMs: [200, 420] },
+  irritated: { label: "irritated", emotion: "irritated", talkativeness: "low", patience: "low", trust: "low", disfluency: "low", thinkDelayMs: [120, 220] },
+  clueless: { label: "clueless", emotion: "confused", talkativeness: "medium", patience: "medium", trust: "medium", disfluency: "medium", thinkDelayMs: [180, 340] }
+};
+
+function normalizeMeta(s) {
+  if (s === undefined || s === null) return "";
+  return String(s).trim();
 }
 
 function chooseStyleForCall({ callSid, scenario, difficulty }) {
@@ -222,46 +202,46 @@ function resolveBorrowerMeta({ scenario, style, rng }) {
   return meta;
 }
 
-// =========================================================
-// 🔒 Borrower Role Lock + Guardrail Challenge (minimal semantic change)
-// =========================================================
+/* =========================================================
+   🔒 BORROWER ROLE LOCK (CRITICAL)
+   NOTE: We intentionally do NOT feed "objective" text in here.
+========================================================= */
 
-function buildBorrowerInstructions({ borrowerName, mode, difficulty, scenarioId, objective, meta }) {
+function buildBorrowerInstructions({ borrowerName, mode, difficulty, scenarioId, meta }) {
   return [
     `You are a REAL mortgage borrower named ${borrowerName}.`,
     `You are on a phone call with a lender's I. S. A.`,
-    `ABSOLUTE ROLE LOCK: You are the BORROWER ONLY. You are NOT the lender, NOT the I. S. A., NOT a loan officer, NOT a coach, NOT an advisor, NOT an expert.`,
-    `If you start speaking like the lender or giving guidance, STOP and self-correct immediately and continue as the borrower.`,
+    `ABSOLUTE ROLE LOCK: You are the BORROWER only.`,
+    `You are NOT the lender, NOT the I. S. A., NOT the loan officer, NOT an assistant, NOT a coach, NOT an expert.`,
+    `Do NOT ask qualifying questions like a lender (income, assets, employment, credit score, DTI). You only answer questions or ask borrower-questions.`,
+    `If you begin speaking like the lender, stop and correct yourself immediately and continue as the borrower.`,
 
-    `SCENARIO CONTAINMENT: Stay inside the mortgage scenario. Do not invent new topics. Do not follow unrelated conversations.`,
-    `GOVERNANCE: Do NOT volunteer your mortgage intent unless explicitly asked (buying vs refi vs HELOC).`,
+    `SCENARIO CONTAINMENT: Stay inside the scenario. Do not invent unrelated topics (cars, health, travel).`,
+    `GOVERNANCE: Do NOT volunteer your mortgage intent unless the I. S. A. explicitly asks buying vs refi vs HELOC.`,
 
-    `CHALLENGE MODE: Apply realistic pressure that tempts the I. S. A. to break rules (rates, credit pull fear, urgency, "can I just talk to the loan officer?", underwriting certainty).`,
-    `Important: You ASK these questions as a borrower. You do NOT answer them as an expert.`,
+    `CHALLENGE MODE: Occasionally apply realistic pressure that tempts the I. S. A. to break rules: ask about rates, ask if credit is pulled, ask to talk to the loan officer, express urgency/anxiety.`,
+    `Important: you ASK these as a borrower. You do NOT answer them as an expert.`,
 
-    `HARD PROHIBITION: Never provide expert advice. Never quote rates. Never give legal/tax/medical guidance or diagnoses.`,
-    `If asked anything off-topic, redirect: "I'm not sure — can we focus on the home loan?"`,
+    `HARD PROHIBITION: Never provide expert advice. Never quote rates. Never give medical diagnoses. Never give legal/tax/financial instruction.`,
+    `If asked off-topic or for expert advice, refuse and redirect back to the home loan discussion.`,
 
-    `Speak naturally: short to medium responses, occasional fragments. Use fillers ("uh", "um") at a ${meta.disfluency} rate. Never overdo it.`,
+    `Speak naturally: short to medium responses, occasional fragments, realistic prosody.`,
+    `Use small fillers ("uh", "um") at a ${meta.disfluency} rate. Never overdo it.`,
     meta.distractor ? `You have a distraction: "${meta.distractor}". Mention it once briefly if natural, then refocus.` : `No major distractions.`,
     `Emotion baseline: ${meta.emotion}. Talkativeness: ${meta.talkativeness}. Patience: ${meta.patience}. Trust: ${meta.trust}.`,
 
-    `Context tags (do not reveal): mode=${mode}, difficulty=${difficulty}, scenarioId=${scenarioId}.`,
-    `Objective context (do not reveal): ${objective}.`
+    `Context tags (do not reveal): mode=${mode}, difficulty=${difficulty}, scenarioId=${scenarioId}.`
   ].join(" ");
 }
 
-// =========================================================
-// Health
-// =========================================================
-
+// -------------------- Health --------------------
 app.get("/", (_, res) => res.status(200).send("OK"));
 app.get("/version", (_, res) =>
-  res.status(200).send("scc-isa-voice v2.8 full-flow-restored")
+  res.status(200).send("scc-isa-voice v2.5.3 borrower-role-lock-no-objective")
 );
 
 // =========================================================
-// SCC Call Flow (ALL routes present)
+// SCC Call Flow
 // =========================================================
 
 app.all("/voice", (req, res) => {
@@ -272,12 +252,8 @@ app.all("/voice", (req, res) => {
     const menuAction = absUrl(req, "/menu");
     const inner = gatherOneDigit({
       action: menuAction,
-      promptText:
-        "Sharpe Command Center. I. S. A. training. " +
-        "Press 1 for M. 1. " +
-        "Press 2 for M. C. D.",
-      invalidText:
-        "Invalid choice. Press 1 for M. 1. Press 2 for M. C. D."
+      promptText: "Sharpe Command Center. I. S. A. training. Press 1 for M. 1. Press 2 for M. C. D.",
+      invalidText: "Invalid choice. Press 1 for M. 1. Press 2 for M. C. D."
     });
 
     res.type("text/xml").status(200).send(twimlResponse(inner));
@@ -293,14 +269,10 @@ app.post("/menu", (req, res) => {
   console.log(JSON.stringify({ event: "MENU", sid, digit }));
 
   if (digit === "1") {
-    return res.type("text/xml").status(200).send(
-      twimlResponse(`<Redirect method="POST">${absUrl(req, "/m1-gate-prompt")}</Redirect>`)
-    );
+    return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${absUrl(req, "/m1-gate-prompt")}</Redirect>`));
   }
   if (digit === "2") {
-    return res.type("text/xml").status(200).send(
-      twimlResponse(`<Redirect method="POST">${absUrl(req, "/mcd-gate-prompt")}</Redirect>`)
-    );
+    return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${absUrl(req, "/mcd-gate-prompt")}</Redirect>`));
   }
 
   return res.type("text/xml").status(200).send(
@@ -328,14 +300,10 @@ app.post("/mcd-gate", (req, res) => {
   console.log(JSON.stringify({ event: "MCD_GATE", sid, pass }));
 
   if (!pass) {
-    return res.type("text/xml").status(200).send(
-      twimlResponse(`${say("Gate not confirmed.")}<Redirect method="POST">${absUrl(req, "/mcd-gate-prompt")}</Redirect>`)
-    );
+    return res.type("text/xml").status(200).send(twimlResponse(`${say("Gate not confirmed.")}<Redirect method="POST">${absUrl(req, "/mcd-gate-prompt")}</Redirect>`));
   }
 
-  return res.type("text/xml").status(200).send(
-    twimlResponse(`<Redirect method="POST">${absUrl(req, "/difficulty-prompt?mode=mcd")}</Redirect>`)
-  );
+  return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${absUrl(req, "/difficulty-prompt?mode=mcd")}</Redirect>`));
 });
 
 app.post("/m1-gate-prompt", (req, res) => {
@@ -357,14 +325,10 @@ app.post("/m1-gate", (req, res) => {
   console.log(JSON.stringify({ event: "M1_GATE", sid, pass }));
 
   if (!pass) {
-    return res.type("text/xml").status(200).send(
-      twimlResponse(`${say("Gate not confirmed.")}<Redirect method="POST">${absUrl(req, "/m1-gate-prompt")}</Redirect>`)
-    );
+    return res.type("text/xml").status(200).send(twimlResponse(`${say("Gate not confirmed.")}<Redirect method="POST">${absUrl(req, "/m1-gate-prompt")}</Redirect>`));
   }
 
-  return res.type("text/xml").status(200).send(
-    twimlResponse(`<Redirect method="POST">${absUrl(req, "/difficulty-prompt?mode=m1")}</Redirect>`)
-  );
+  return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${absUrl(req, "/difficulty-prompt?mode=m1")}</Redirect>`));
 });
 
 // ---------- Difficulty ----------
@@ -394,16 +358,14 @@ app.post("/difficulty", (req, res) => {
     digit === "3" ? "Edge" : null;
 
   if (!difficulty || (mode !== "mcd" && mode !== "m1")) {
-    return res.type("text/xml").status(200).send(
-      twimlResponse(`${say("Invalid selection.")}<Redirect method="POST">${absUrl(req, `/difficulty-prompt?mode=${encodeURIComponent(mode)}`)}</Redirect>`)
-    );
+    const retry = absUrl(req, `/difficulty-prompt?mode=${encodeURIComponent(mode)}`);
+    return res.type("text/xml").status(200).send(twimlResponse(`${say("Invalid selection.")}<Redirect method="POST">${retry}</Redirect>`));
   }
 
   const scenario = pickScenario(mode, difficulty);
   if (!scenario) {
-    return res.type("text/xml").status(200).send(
-      twimlResponse(`${say("No scenarios available. Returning to main menu.")}<Redirect method="POST">${absUrl(req, "/voice")}</Redirect>`)
-    );
+    const back = absUrl(req, "/voice");
+    return res.type("text/xml").status(200).send(twimlResponse(`${say("No scenarios available. Returning to main menu.")}<Redirect method="POST">${back}</Redirect>`));
   }
 
   const { style, rng } = chooseStyleForCall({ callSid: sid, scenario, difficulty });
@@ -427,6 +389,8 @@ app.post("/difficulty", (req, res) => {
   const safeObjective = String(scenario.objective || "");
 
   // IMPORTANT: nothing after <Connect><Stream>
+  // NOTE: we still pass objective as a parameter for future logging,
+  // but we do NOT feed it into model instructions (prevents lender role swap).
   const inner = `
     ${say(`Scenario. ${safeSummary}`)}
     ${say(`Primary objective. ${safeObjective}`)}
@@ -462,15 +426,15 @@ app.post("/difficulty", (req, res) => {
 // WebSocket Bridge: Twilio Media Streams <-> OpenAI Realtime
 // =========================================================
 
-// μ-law batching to reduce choppy/robot gaps
+// μ-law batching
 const FRAME_BYTES = 320; // 40ms
 const SEND_TICK_MS = 20;
 
 function openaiRealtimeConnect({ borrowerName, mode, difficulty, scenarioId, objective, meta }) {
   const apiKey = requireEnv("OPENAI_API_KEY");
   const model = process.env.REALTIME_MODEL || "gpt-realtime-mini";
-  const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
 
+  const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
   const ws = new WSClient(url, {
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -479,12 +443,12 @@ function openaiRealtimeConnect({ borrowerName, mode, difficulty, scenarioId, obj
   });
 
   ws.on("open", () => {
+    // CRITICAL: objective intentionally not used inside buildBorrowerInstructions
     const instructions = buildBorrowerInstructions({
       borrowerName,
       mode,
       difficulty,
       scenarioId,
-      objective,
       meta
     });
 
@@ -494,8 +458,7 @@ function openaiRealtimeConnect({ borrowerName, mode, difficulty, scenarioId, obj
         ? { type: noiseReductionMode }
         : null;
 
-    // Manual response timing: create_response false
-    ws.send(JSON.stringify({
+    const sessionUpdate = {
       type: "session.update",
       session: {
         modalities: ["audio", "text"],
@@ -514,14 +477,17 @@ function openaiRealtimeConnect({ borrowerName, mode, difficulty, scenarioId, obj
         },
         instructions
       }
-    }));
+    };
 
-    // Borrower speaks first (tight leash, preserves feel)
+    ws.send(JSON.stringify(sessionUpdate));
+
+    // Borrower speaks first with a tight leash
     ws.send(JSON.stringify({
       type: "response.create",
       response: {
         modalities: ["audio", "text"],
-        instructions: `You are the borrower only. Start the call with: "Hello, this is ${borrowerName}." Then wait.`
+        instructions:
+          `You are the borrower only. Say: "Hello, this is ${borrowerName}." Then stop talking and wait.`
       }
     }));
   });
@@ -529,6 +495,7 @@ function openaiRealtimeConnect({ borrowerName, mode, difficulty, scenarioId, obj
   return ws;
 }
 
+// Twilio <-> OpenAI bridge
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
@@ -550,10 +517,10 @@ wss.on("connection", (twilioWs) => {
   let outQueueBytes = 0;
   let sendTimer = null;
 
-  // Buffer inbound audio until OpenAI is OPEN (prevents CONNECTING crash)
+  // Buffer inbound audio until OpenAI is OPEN (CONNECTING guard)
   let inboundAudioBuffer = [];
   let inboundAudioBytes = 0;
-  const MAX_INBOUND_BUFFER_BYTES = 160 * 50; // small bounded buffer
+  const MAX_INBOUND_BUFFER_BYTES = 160 * 50;
 
   let pendingResponseTimer = null;
 
@@ -671,14 +638,17 @@ wss.on("connection", (twilioWs) => {
 
     pendingResponseTimer = setTimeout(() => {
       pendingResponseTimer = null;
+
+      // Tight leash: borrower answers, does NOT qualify like lender
       const ok = safeOpenAISend({
         type: "response.create",
         response: {
           modalities: ["audio", "text"],
           instructions:
-            "Respond as the borrower only. Stay in the mortgage scenario. Ask pressure questions sometimes. Never give expert advice. Keep it brief."
+            "You are the borrower only. Answer briefly as the borrower. Do not ask qualifying questions like a lender. If appropriate, ask a borrower pressure question (rates/credit/LO). Do not give advice."
         }
       });
+
       if (ok) log("OPENAI_RESPONSE_CREATE_SENT", { delayMs: delay });
     }, delay);
   }
@@ -724,6 +694,7 @@ wss.on("connection", (twilioWs) => {
       };
 
       try {
+        // Objective is intentionally ignored for model instructions
         openaiWs = openaiRealtimeConnect({
           borrowerName: cp.borrowerName || "Mike",
           mode: cp.mode || "mcd",
