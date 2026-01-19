@@ -1,12 +1,11 @@
 /* SCC ISA Training Voice System (Governance-First)
- * v2.5.1 — Render Port Bind + OpenAI CONNECTING Guard (No Crash) + Narrator Fix
+ * v2.5.2 — OpenAI Stable + Narrator ISA Pronunciation Sanitizer
  *
  * Fixes:
- * - Render port binding uses process.env.PORT
- * - Prevent crash: never openaiWs.send() while readyState is CONNECTING
- *   - Buffer Twilio audio until OpenAI WS is OPEN, then flush
- * - Narrator: ISA -> I. S. A. (everywhere), keep M. 1. / M. C. D., no weird slowing
- * - TwiML: <Connect><Stream> is last (no tail TwiML that can end calls)
+ * - OpenAI CONNECTING guard (no crash) retained
+ * - Render port binding retained
+ * - NEW: Any standalone "ISA" spoken by narrator becomes "I. S. A."
+ *   (catches scenario.summary / scenario.objective / any narrator text)
  */
 
 const fs = require("fs");
@@ -80,6 +79,14 @@ function requireEnv(name) {
   return v;
 }
 
+// NEW: narrator pronunciation sanitizer
+// - converts standalone "ISA" -> "I. S. A."
+// - avoids changing words like "is a" or "is awesome"
+// - also handles "ISA." "ISA," "ISA:" etc due to word boundary
+function pronounceISA(text) {
+  return String(text).replace(/\bISA\b/g, "I. S. A.");
+}
+
 // -------------------- Deterministic RNG (by CallSid) --------------------
 function hashStringToUint32(str) {
   let h = 2166136261;
@@ -117,7 +124,9 @@ function clampInt(n, min, max) {
 const NARRATOR_VOICE = "Google.en-US-Chirp3-HD-Aoede";
 
 function say(text) {
-  return `<Say voice="${NARRATOR_VOICE}">${xmlEscape(text)}</Say>`;
+  // apply pronunciation sanitizer BEFORE escaping
+  const cleaned = pronounceISA(text);
+  return `<Say voice="${NARRATOR_VOICE}">${xmlEscape(cleaned)}</Say>`;
 }
 
 function gatherOneDigit({ action, promptText, invalidText }) {
@@ -216,7 +225,7 @@ function buildBorrowerInstructions({ borrowerName, mode, difficulty, scenarioId,
 // -------------------- Health --------------------
 app.get("/", (_, res) => res.status(200).send("OK"));
 app.get("/version", (_, res) =>
-  res.status(200).send("scc-isa-voice v2.5.1 (port bind + openai ws guard)")
+  res.status(200).send("scc-isa-voice v2.5.2 (ISA narrator sanitizer)")
 );
 
 // =========================================================
@@ -266,7 +275,7 @@ app.post("/menu", (req, res) => {
   );
 });
 
-// ---------- Gates (clarify once, not slow) ----------
+// ---------- Gates ----------
 app.post("/mcd-gate-prompt", (req, res) => {
   const sid = req.body.CallSid;
   console.log(JSON.stringify({ event: "MCD_GATE_PROMPT", sid }));
@@ -420,8 +429,8 @@ const SEND_TICK_MS = 20; // schedule cadence
 function openaiRealtimeConnect({ borrowerName, mode, difficulty, scenarioId, objective, meta }) {
   const apiKey = requireEnv("OPENAI_API_KEY");
   const model = process.env.REALTIME_MODEL || "gpt-realtime-mini";
-  const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
 
+  const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
   const ws = new WSClient(url, {
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -505,7 +514,7 @@ wss.on("connection", (twilioWs) => {
   // Buffer inbound audio until OpenAI is OPEN
   let inboundAudioBuffer = [];
   let inboundAudioBytes = 0;
-  const MAX_INBOUND_BUFFER_BYTES = 160 * 50; // ~1s of ulaw at 8kHz (roughly) - safe, small
+  const MAX_INBOUND_BUFFER_BYTES = 160 * 50; // small bounded buffer
 
   let pendingResponseTimer = null;
 
@@ -529,7 +538,6 @@ wss.on("connection", (twilioWs) => {
       inboundAudioBuffer.push(buf);
       inboundAudioBytes += buf.length;
 
-      // Keep buffer bounded
       while (inboundAudioBytes > MAX_INBOUND_BUFFER_BYTES && inboundAudioBuffer.length) {
         const dropped = inboundAudioBuffer.shift();
         inboundAudioBytes -= dropped.length;
@@ -686,8 +694,6 @@ wss.on("connection", (twilioWs) => {
           log("OPENAI_WS_OPEN", { model: process.env.REALTIME_MODEL || "gpt-realtime-mini", meta });
           log("OPENAI_SESSION_CONFIGURED");
           startSendTimer();
-
-          // Flush any audio we received while OpenAI was connecting
           flushInboundAudio();
         });
 
@@ -745,7 +751,6 @@ wss.on("connection", (twilioWs) => {
       const payload = data.media?.payload;
       if (!payload) return;
 
-      // If OpenAI isn't open yet, buffer; otherwise send immediately.
       if (!openaiWs || openaiWs.readyState !== 1) {
         bufferInboundAudio(payload);
         return;
