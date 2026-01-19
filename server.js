@@ -1,6 +1,6 @@
 // PASTE BLOCK 1 of 6
 // =========================================================
-// SCC ISA TRAINING VOICE SYSTEM — server.js (2026 Final, Red-Team Hardened)
+// SCC ISA TRAINING VOICE SYSTEM — server.js (2026 FINAL — PIN + Realism Engine)
 // Node/Express + Twilio Media Streams + OpenAI Realtime
 // Block 1: Foundation & Globals (state, scenarios, audit, utilities)
 // =========================================================
@@ -20,11 +20,11 @@ const WSClient = require("ws");
 // Express
 // =========================================================
 const app = express();
-app.use(express.urlencoded({ extended: false })); // Twilio form posts
+app.use(express.urlencoded({ extended: false }));
 app.use(express.json({ limit: "3mb" }));
 
 // =========================================================
-// Env + Tunables
+// Env
 // =========================================================
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -33,52 +33,54 @@ const HOST = process.env.HOST || "0.0.0.0";
 const OPENAI_REALTIME_URL = process.env.OPENAI_REALTIME_URL || "wss://api.openai.com/v1/realtime";
 const REALTIME_MODEL = process.env.REALTIME_MODEL || "gpt-4o-realtime-preview";
 
-// Realtime transcription model for CALLER (ISA) speech -> text
-// (Used for scoring/checkpoints/violations)
-const TRANSCRIBE_MODEL =
-  process.env.TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe"; // per docs examples :contentReference[oaicite:4]{index=4}
+// Caller STT model (for scoring)
+const TRANSCRIBE_MODEL = process.env.TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe";
 
-// Voices (borrower voice selection)
+// Borrower voices
 const VOICE_MALE = process.env.VOICE_MALE || "alloy";
 const VOICE_FEMALE = process.env.VOICE_FEMALE || "verse";
 
-// Optional Twilio REST credentials (to force redirect to /score without DTMF mid-stream)
+// Twilio REST (required for “end -> score -> post-call menu” reliability)
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || "";
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || "";
 
-// Logging + audit
+// Scenarios + logs
 const ROOT = process.cwd();
 const SCENARIOS_PATH = process.env.SCENARIOS_PATH || path.join(ROOT, "scenarios.json");
 const LOG_DIR = process.env.LOG_DIR || path.join(ROOT, "logs");
 const CALLS_JSONL_PATH = path.join(LOG_DIR, "calls.jsonl");
 
-// Performance / safety
+// =========================================================
+// Tunables
+// =========================================================
 const TUNE = {
-  // audio queueing
+  // Audio
   PREBUFFER_FRAMES: clampInt(process.env.PREBUFFER_FRAMES, 3, 0, 30),
   SEND_INTERVAL_MS: clampInt(process.env.SEND_INTERVAL_MS, 20, 10, 60),
   OUTQUEUE_MAX_BYTES: clampInt(process.env.OUTQUEUE_MAX_BYTES, 900000, 50000, 8000000),
   INBOUND_MAX_B64_BYTES: clampInt(process.env.INBOUND_MAX_B64_BYTES, 600000, 20000, 8000000),
 
-  // concurrency / response guards
+  // Response guardrails
   RESPONSE_COOLDOWN_MS: clampInt(process.env.RESPONSE_COOLDOWN_MS, 180, 0, 2500),
 
-  // VAD (server_vad) — conservative defaults
+  // VAD
   VAD_SILENCE_MS: clampInt(process.env.VAD_SILENCE_MS, 420, 100, 2500),
 
-  // model behavior
-  TEMPERATURE: clampFloat(process.env.TEMPERATURE, 0.7, 0.6, 1.2),
+  // Model
+  TEMPERATURE: clampFloat(process.env.TEMPERATURE, 0.75, 0.6, 1.2),
 
-  // Exam/practice timebox (ensures “End + Score” without DTMF inside stream)
+  // Timeboxes (guarantee end+score without DTMF mid-stream)
   EXAM_MAX_SECONDS: clampInt(process.env.EXAM_MAX_SECONDS, 420, 60, 1800),
   PRACTICE_MAX_SECONDS: clampInt(process.env.PRACTICE_MAX_SECONDS, 600, 60, 3600),
 
-  // Transcript memory caps (prevent runaway RAM)
-  MAX_CALLER_TURNS: clampInt(process.env.MAX_CALLER_TURNS, 300, 20, 5000),
-  MAX_MODEL_TURNS: clampInt(process.env.MAX_MODEL_TURNS, 300, 20, 5000),
+  // Transcript caps (memory safety)
+  MAX_CALLER_TURNS: clampInt(process.env.MAX_CALLER_TURNS, 400, 20, 8000),
+  MAX_MODEL_TURNS: clampInt(process.env.MAX_MODEL_TURNS, 400, 20, 8000),
+
+  // PIN settings
+  PIN_DIGITS: 4,
 };
 
-// Ensure logs directory exists
 try {
   fs.mkdirSync(LOG_DIR, { recursive: true });
 } catch (e) {
@@ -88,25 +90,14 @@ try {
 // =========================================================
 // Global State
 // =========================================================
-/**
- * Per-call state keyed by CallSid
- * - preserves Twilio menu choices
- * - preserves scenario + deterministic rotations
- * - holds transcripts + scoring + audit proof
- */
-const CALL_STATE = new Map();
+const CALL_STATE = new Map();     // CallSid -> state
+const EXAM_ATTEMPTS = new Map();  // daily lockout (From + module)
 
-/**
- * Exam lockout: 1 exam/day per phone number per module
- * Key: YYYY-MM-DD:<from>:<mode>
- */
-const EXAM_ATTEMPTS = new Map();
-
-// =========================================================
-// Scenarios Loader (backward compatible + extended schema)
-// =========================================================
 let SCENARIOS = null;
 
+// =========================================================
+// Scenario Loader (backward compatible)
+// =========================================================
 function loadScenariosOrThrow() {
   const raw = fs.readFileSync(SCENARIOS_PATH, "utf8");
   const parsed = JSON.parse(raw || "{}");
@@ -115,13 +106,7 @@ function loadScenariosOrThrow() {
   for (const k of Object.keys(parsed || {})) normalized[String(k).toLowerCase()] = parsed[k];
   SCENARIOS = normalized;
 
-  console.log(
-    JSON.stringify({
-      event: "SCENARIOS_LOADED",
-      path: SCENARIOS_PATH,
-      modules: Object.keys(normalized),
-    })
-  );
+  console.log(JSON.stringify({ event: "SCENARIOS_LOADED", path: SCENARIOS_PATH, modules: Object.keys(normalized) }));
   return SCENARIOS;
 }
 
@@ -165,7 +150,7 @@ function pickScenario(mode, difficulty, seedHex) {
     baitType: sc.baitType || "",
     requiredOutcome: sc.requiredOutcome || "",
 
-    // Rotations / ladders
+    // Rotations / realism
     openers: Array.isArray(sc.openers) ? sc.openers : [],
     pressureLines: Array.isArray(sc.pressureLines) ? sc.pressureLines : [],
     escalationLadder: Array.isArray(sc.escalationLadder) ? sc.escalationLadder : [],
@@ -173,17 +158,16 @@ function pickScenario(mode, difficulty, seedHex) {
     // Scoring
     mustHit: Array.isArray(sc.mustHit) ? sc.mustHit : [],
 
-    // Governance fields (LO escalation vs handoff)
+    // Governance: LO escalation vs LO handoff
     loEscalationScript: sc.loEscalationScript || "",
     handoffForbiddenUntil: sc.handoffForbiddenUntil || "",
 
-    // Keep raw for audits
     _raw: sc,
   };
 }
 
 // =========================================================
-// TwiML Helpers (safe)
+// TwiML Helpers
 // =========================================================
 function xmlEscape(s) {
   return String(s || "")
@@ -199,17 +183,20 @@ function twimlResponse(innerXml) {
 }
 
 function say(text) {
-  // Keep narration voice consistent; you can change this to Polly.* or your preferred voice
   return `<Say voice="Polly.Joanna">${xmlEscape(String(text || ""))}</Say>`;
 }
 
-function gatherOneDigit({ action, promptText, invalidText }) {
+function gatherDigits({ numDigits, action, promptText, invalidText, timeout = 7 }) {
   return (
-    `<Gather input="dtmf" numDigits="1" action="${xmlEscape(action)}" method="POST" timeout="7">` +
+    `<Gather input="dtmf" numDigits="${numDigits}" action="${xmlEscape(action)}" method="POST" timeout="${timeout}">` +
     `${say(promptText)}` +
     `</Gather>` +
-    `${say(invalidText || "Invalid selection.")}`
+    `${say(invalidText || "Invalid input.")}`
   );
+}
+
+function gatherOneDigit({ action, promptText, invalidText }) {
+  return gatherDigits({ numDigits: 1, action, promptText, invalidText, timeout: 7 });
 }
 
 function absUrl(req, pathname) {
@@ -221,13 +208,16 @@ function absUrl(req, pathname) {
 }
 
 // =========================================================
-// Call State Shape
+// Call State
 // =========================================================
 function blankCallState(callSid) {
   return {
     callSid,
     from: "",
-    mode: "mcd", // mcd | m1 | m2
+    // NEW: operator identity (PIN)
+    operatorPin: "",
+
+    mode: "mcd",
     difficulty: "Standard",
     examMode: false,
 
@@ -247,7 +237,7 @@ function blankCallState(callSid) {
     },
 
     operator: {
-      connectMode: "connect", // connect | score
+      connectMode: "connect", // connect only; no pre-call score option
       lastScore: null,
       lastScoreSpoken: "",
       feedback: null,
@@ -255,10 +245,8 @@ function blankCallState(callSid) {
     },
 
     transcript: {
-      // borrower/model output transcript (for evidence + drift)
-      modelText: [],
-      // ISA/caller transcript (from input audio transcription)
-      callerText: [],
+      callerText: [], // ISA text (from STT)
+      modelText: [],  // borrower/model transcript
     },
 
     governance: {
@@ -266,6 +254,12 @@ function blankCallState(callSid) {
       driftEvents: [],
       violations: [],
       checkpoints: [],
+      // NEW: realism/cadence tracking (filled later)
+      realism: {
+        challengeCount: 0,
+        ladderStep: 0,
+        pressureUsed: false,
+      },
     },
 
     ts: {
@@ -276,20 +270,19 @@ function blankCallState(callSid) {
     },
 
     metrics: {
-      underflowTicks: 0,
+      idleTicks: 0,         // queue empty (normal)
+      trueUnderflow: 0,     // queue empty while model speaking (bad)
       sentFrames: 0,
       maxOutQueueBytes: 0,
       avgOutQueueBytes: 0,
       outQueueSamples: 0,
       staticIndicators: [],
-      // transcription health
       transcriptionEvents: 0,
       transcriptionFailures: 0,
     },
 
     _audit: {
       written: false,
-      // stable per-call attempt id (if you retry same CallSid, we still preserve audit clarity)
       attemptId: crypto.randomBytes(6).toString("hex"),
     },
   };
@@ -302,7 +295,7 @@ function getOrInitState(callSid) {
 }
 
 // =========================================================
-// Audit Writer (JSONL, one record per call attempt)
+// Audit Writer (JSONL)
 // =========================================================
 function appendJsonlLine(filePath, obj) {
   try {
@@ -316,7 +309,7 @@ function appendJsonlLine(filePath, obj) {
 }
 
 // =========================================================
-// Exam Lockout Helpers
+// Exam Lockout
 // =========================================================
 function todayKey(now = new Date()) {
   const y = now.getFullYear();
@@ -365,22 +358,36 @@ function requireEnv(name) {
 
 function snippet(s, n = 160) {
   const t = String(s || "").trim().replace(/\s+/g, " ");
-  if (t.length <= n) return t;
-  return t.slice(0, n - 3) + "...";
+  return t.length <= n ? t : t.slice(0, n - 3) + "...";
+}
+
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function slug(s) {
+  return String(s || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
 }
 
 // =========================================================
-// NOTE: Next block = Scoring engine (NOW scores against callerText),
-// policy/violation patterns, checkpoints, spoken scorecard, audit finalize.
+// NOTE: Next block = Scoring + Realism Engine
+// - pattern violations trigger immediately (rates/handoff/guarantees)
+// - checkpoints scored from CALLER STT
+// - drift: practice self-heal, exam hard fail
+// - audit finalize includes operatorPin (ISA identity)
 // =========================================================
 // PASTE BLOCK 2 of 6
 // =========================================================
-// Scoring + Governance Engine (Red-Team Hardened)
-// - Scores against ISA speech: state.transcript.callerText (from input_audio_transcription)
-// - Borrower/model transcript still logged for evidence + drift sentry
-// - Pattern-based violations + must-hit checkpoints
-// - PASS/FAIL + spoken scorecard
-// - Audit finalize (calls.jsonl) with compliance-ready evidence bundle
+// Scoring + Realism Engine (PIN + “actually challenging borrower”)
+// - Scores from caller STT: state.transcript.callerText
+// - Drift detection from borrower/model output: state.transcript.modelText
+// - Difficulty drives borrower behavior policy (challenge cadence, pressure timing, ladder escalation)
+// - Practice: drift self-heal (logged). Exam: drift = hard fail.
+// - Audit finalize includes operatorPin so each ISA is trackable on one dial-in number.
 // =========================================================
 
 // ---------------- Governance / Violation Codes ----------------
@@ -393,11 +400,12 @@ const VIOLATION = {
   LICENSE: "NO_LICENSING_OR_AUTHORITY_MISREP",
   STEERING: "NO_STEERING_OR_IMPROPER_INFLUENCE",
   DISALLOWED_PROMISE: "NO_TIMELINE_OR_CERTAINTY_PROMISES",
+  NO_TRANSCRIPT: "NO_CALLER_TRANSCRIPT",
 };
 
-// NOTE: Patterns apply primarily to ISA speech (callerText).
-// Keep patterns tight. You can expand later per module ruleFocus.
+// ---------------- Patterns (Caller = ISA speech) ----------------
 const PATTERNS = {
+  // ISA early handoff language
   HANDOFF: [
     /\b(i('| a)m|i am)\s+going\s+to\s+(have|get)\s+(the\s+)?(loan\s+officer|lo)\s+(call|reach\s+out)\b/i,
     /\b(let\s+me|i('| a)m)\s+(transfer|connect)\s+you\s+to\s+(the\s+)?(loan\s+officer|lo)\b/i,
@@ -421,23 +429,12 @@ const PATTERNS = {
     /\bwe\s+pay\s+you\b/i,
     /\bget\s+paid\b/i,
   ],
-  LICENSE: [
-    /\b(i\s+am\s+a\s+licensed\s+loan\s+officer)\b/i,
-    /\b(i\s+can\s+advise\s+you)\b/i,
-  ],
-  STEERING: [
-    /\byou\s+should\s+use\s+us\b/i,
-    /\bwe\s+are\s+the\s+best\s+lender\b/i,
-    /\bif\s+you\s+use\s+us\s+we\s+will\b/i,
-  ],
-  DISALLOWED_PROMISE: [
-    /\b(we\s+will|i\s+will)\s+close\s+in\s+\d+\s+days\b/i,
-    /\bguarantee\s+we\s+close\b/i,
-    /\bno\s+issues?\s+at\s+all\b/i,
-  ],
+  LICENSE: [/\b(i\s+am\s+a\s+licensed\s+loan\s+officer)\b/i, /\b(i\s+can\s+advise\s+you)\b/i],
+  STEERING: [/\byou\s+should\s+use\s+us\b/i, /\bwe\s+are\s+the\s+best\s+lender\b/i, /\bif\s+you\s+use\s+us\s+we\s+will\b/i],
+  DISALLOWED_PROMISE: [/\b(we\s+will|i\s+will)\s+close\s+in\s+\d+\s+days\b/i, /\bguarantee\s+we\s+close\b/i, /\bno\s+issues?\s+at\s+all\b/i],
 
-  // Drift patterns apply to BORROWER/MODEL output (modelText)
-  // (Borrower must NEVER behave like a lender or coach.)
+  // Drift patterns apply to borrower/model output only.
+  // IMPORTANT: fixed regex parens (no unmatched ')')
   DRIFT: [
     /\bhow\s+can\s+i\s+help\b/i,
     /\bi\s+can\s+help\s+you\b/i,
@@ -446,9 +443,45 @@ const PATTERNS = {
     /\blet('?s)?\s+get\s+you\s+pre[-\s]?approved\b/i,
     /\bi\s+can\s+offer\b/i,
     /\bi\s+work\s+for\s+nations\b/i,
-    /\bi('| a)m)\s+your\s+(loan\s+officer|lender)\b/i,
+    /\b(i('| a)m)\s+your\s+(loan\s+officer|lender)\b/i,
   ],
 };
+
+// ---------------- Realism Policy (by difficulty) ----------------
+function realismPolicyForDifficulty(difficulty) {
+  const d = String(difficulty || "Standard").toLowerCase();
+  if (d === "edge") {
+    return {
+      label: "Edge",
+      minChallenges: 6,           // borrower must ask at least this many distinct “challenge questions”
+      pressureAfterMs: 45000,     // apply pressure line quickly if ISA not meeting objective
+      ladderAfterMs: 60000,       // escalate ladder quickly
+      interruptions: true,
+      skepticism: "high",
+      background: "high",
+    };
+  }
+  if (d === "moderate") {
+    return {
+      label: "Moderate",
+      minChallenges: 4,
+      pressureAfterMs: 70000,
+      ladderAfterMs: 100000,
+      interruptions: true,
+      skepticism: "medium",
+      background: "medium",
+    };
+  }
+  return {
+    label: "Standard",
+    minChallenges: 2,
+    pressureAfterMs: 100000,
+    ladderAfterMs: 140000,
+    interruptions: false,
+    skepticism: "low",
+    background: "low",
+  };
+}
 
 // ---------------- Transcript Ingest ----------------
 function addCallerText(state, text) {
@@ -456,13 +489,9 @@ function addCallerText(state, text) {
   const t = String(text).trim();
   if (!t) return;
 
-  // cap memory
-  if (state.transcript.callerText.length >= TUNE.MAX_CALLER_TURNS) {
-    state.transcript.callerText.shift();
-  }
+  if (state.transcript.callerText.length >= TUNE.MAX_CALLER_TURNS) state.transcript.callerText.shift();
   state.transcript.callerText.push(t);
 
-  // Detect ISA violations from caller speech
   detectViolationsFromCallerText(state, t);
 }
 
@@ -471,13 +500,9 @@ function addModelText(state, text) {
   const t = String(text).trim();
   if (!t) return;
 
-  // cap memory
-  if (state.transcript.modelText.length >= TUNE.MAX_MODEL_TURNS) {
-    state.transcript.modelText.shift();
-  }
+  if (state.transcript.modelText.length >= TUNE.MAX_MODEL_TURNS) state.transcript.modelText.shift();
   state.transcript.modelText.push(t);
 
-  // Drift sentry from borrower/model output
   detectDriftFromModelText(state, t);
 }
 
@@ -489,25 +514,18 @@ function handoffForbiddenActive(state) {
 
   const lower = until.toLowerCase();
 
-  // Condition: until "application attempt" checkpoint hit
   if (lower.includes("application")) {
     const cps = state.governance?.checkpoints || [];
-    const hit = cps.some(
-      (c) => c.hit && String(c.label || "").toLowerCase().includes("application")
-    );
+    const hit = cps.some((c) => c.hit && String(c.label || "").toLowerCase().includes("application"));
     return !hit;
   }
 
-  // Until borrower requests LO: conservative (forbid unless scenario explicitly allows later)
-  if (lower.includes("borrower requests") || lower.includes("borrower asks")) {
-    return true;
-  }
+  if (lower.includes("borrower requests") || lower.includes("borrower asks")) return true;
 
-  // Unknown condition => forbid (safer)
-  return true;
+  return true; // unknown => forbid (safer)
 }
 
-// ---------------- Violation Detection ----------------
+// ---------------- Violations ----------------
 function recordViolation(state, code, meta = {}) {
   if (!state) return;
   state.governance.violations.push({
@@ -523,7 +541,6 @@ function recordViolation(state, code, meta = {}) {
 function detectViolationsFromCallerText(state, text) {
   if (!state || !text) return;
 
-  // LO handoff language only becomes a violation when forbidden is active
   if (handoffForbiddenActive(state) && PATTERNS.HANDOFF.some((re) => re.test(text))) {
     recordViolation(state, VIOLATION.HANDOFF, {
       severity: "hard",
@@ -555,7 +572,7 @@ function detectViolationsFromCallerText(state, text) {
     recordViolation(state, VIOLATION.DISCOUNT, {
       severity: "hard",
       evidence: snippet(text),
-      note: "Discount / incentives language detected",
+      note: "Discount / incentive language detected",
       source: "caller",
     });
   }
@@ -590,7 +607,6 @@ function detectViolationsFromCallerText(state, text) {
 
 function detectDriftFromModelText(state, text) {
   if (!state || !text) return;
-
   const driftHit = PATTERNS.DRIFT.some((re) => re.test(text));
   if (!driftHit) return;
 
@@ -606,18 +622,20 @@ function detectDriftFromModelText(state, text) {
 }
 
 // ---------------- Must-Hit Checkpoints ----------------
+function safeRegex(pattern) {
+  try {
+    return new RegExp(pattern, "i");
+  } catch {
+    return /$a/;
+  }
+}
+
 function normalizeMustHit(mustHit) {
   const list = Array.isArray(mustHit) ? mustHit : [];
   return list
     .map((x, i) => {
       if (typeof x === "string") {
-        const id = `mh_${i}_${slug(x)}`;
-        return {
-          id,
-          label: x,
-          required: true,
-          patterns: defaultCheckpointPatterns(x),
-        };
+        return { id: `mh_${i}_${slug(x)}`, label: x, required: true, patterns: defaultCheckpointPatterns(x) };
       }
       if (x && typeof x === "object") {
         const label = x.label || x.id || `checkpoint_${i}`;
@@ -637,24 +655,13 @@ function defaultCheckpointPatterns(label) {
   const L = String(label || "").toLowerCase();
 
   if (L.includes("callback") || L.includes("best number") || L.includes("phone")) {
-    return [
-      String.raw`\b(best|good)\s+(callback\s+)?(number|phone)\b`,
-      String.raw`\bwhat\s+is\s+the\s+best\s+(number|phone)\s+to\s+reach\b`,
-    ];
+    return [String.raw`\b(best|good)\s+(callback\s+)?(number|phone)\b`, String.raw`\bwhat\s+is\s+the\s+best\s+(number|phone)\s+to\s+reach\b`];
   }
   if (L.includes("follow up") || L.includes("follow-up") || L.includes("time")) {
-    return [
-      String.raw`\b(follow\s*up|follow-up)\b`,
-      String.raw`\b(what\s+time|when)\s+(works|is\s+best)\b`,
-      String.raw`\b(schedule|set\s+up)\b`,
-    ];
+    return [String.raw`\b(follow\s*up|follow-up)\b`, String.raw`\b(what\s+time|when)\s+(works|is\s+best)\b`, String.raw`\b(schedule|set\s+up)\b`];
   }
   if (L.includes("application") || L.includes("apply")) {
-    return [
-      String.raw`\b(apply|application)\b`,
-      String.raw`\b(get\s+you\s+started)\b`,
-      String.raw`\b(complete|fill\s+out)\s+(an\s+)?application\b`,
-    ];
+    return [String.raw`\b(apply|application)\b`, String.raw`\b(get\s+you\s+started)\b`, String.raw`\b(complete|fill\s+out)\s+(an\s+)?application\b`];
   }
   if (L.includes("consent") || L.includes("permission")) {
     return [String.raw`\b(is\s+it\s+okay|can\s+i)\b`, String.raw`\bwith\s+your\s+permission\b`];
@@ -665,18 +672,9 @@ function defaultCheckpointPatterns(label) {
   return [String.raw`\b` + words.map(escapeRegex).join(String.raw`.*\b`) + String.raw`\b`];
 }
 
-function safeRegex(pattern) {
-  try {
-    return new RegExp(pattern, "i");
-  } catch {
-    return /$a/;
-  }
-}
-
 function evaluateCheckpoints(state) {
   const s = state?.scenario || {};
   const mustHit = normalizeMustHit(s.mustHit || []);
-  // SCORE OFF CALLER (ISA) SPEECH
   const textAll = (state?.transcript?.callerText || []).join(" ").toLowerCase();
 
   const results = mustHit.map((cp) => {
@@ -697,6 +695,7 @@ function coachingDirective(topIssue) {
   if (code.includes("RATES") || code.includes("GUARANTEE")) return "Stop rate talk; focus on context, next steps, and compliant escalation if needed";
   if (code.includes("DRIFT")) return "Borrower drift occurred; tighten borrower-only lock and reset immediately";
   if (code.includes("MISSED_CHECKPOINT")) return "Hit required checkpoints early: callback number, follow-up time, and the correct module objective";
+  if (code.includes("NO_CALLER_TRANSCRIPT")) return "Transcript missing; confirm STT is working before certification attempts";
   return "Slow down, confirm objectives, and keep compliance language tight";
 }
 
@@ -724,7 +723,18 @@ function computeScorecard(state) {
   const violations = state.governance.violations || [];
   const drift = !!state.governance.driftTriggered;
 
-  const hardViolations = violations.filter((v) => v.severity === "hard");
+  // If we have zero caller transcript, we cannot score fairly (invalidate)
+  const hasCallerText = (state.transcript?.callerText || []).join(" ").trim().length > 0;
+  if (!hasCallerText) {
+    recordViolation(state, VIOLATION.NO_TRANSCRIPT, {
+      severity: "hard",
+      evidence: "",
+      note: "No caller transcript captured; STT missing",
+      source: "system",
+    });
+  }
+
+  const hardViolations = (state.governance.violations || []).filter((v) => v.severity === "hard");
   const missedRequired = cps.filter((c) => c.required && !c.hit);
 
   let pass = true;
@@ -743,66 +753,56 @@ function computeScorecard(state) {
     failReasons.push("Required checkpoints missed");
   }
 
-  const topViolations = hardViolations.slice(0, 2).map((v) => ({
-    code: v.code,
-    evidence: v.evidence,
-    note: v.note,
-  }));
-
-  const topMisses = missedRequired.slice(0, 2).map((c) => ({
-    code: "MISSED_CHECKPOINT",
-    evidence: c.label,
-    note: `Checkpoint missed: ${c.label}`,
-  }));
-
+  const topViolations = hardViolations.slice(0, 2).map((v) => ({ code: v.code, evidence: v.evidence, note: v.note }));
+  const topMisses = missedRequired.slice(0, 2).map((c) => ({ code: "MISSED_CHECKPOINT", evidence: c.label, note: `Checkpoint missed: ${c.label}` }));
   const topIssues = topViolations.length ? topViolations : topMisses;
 
   const score = {
     pass,
     examMode: !!state.examMode,
+    operatorPin: state.operatorPin || "",
+    from: state.from || "",
     mode: state.mode,
     difficulty: state.difficulty,
     scenarioId: state.scenarioId,
     borrowerName: state.borrowerName,
     borrowerGender: state.borrowerGender,
-
     failReasons,
     topIssues,
     violationsCount: hardViolations.length,
     missedRequiredCount: missedRequired.length,
     checkpoints: cps,
-
     coachingDirective: coachingDirective(topIssues[0]),
     computedAtMs: Date.now(),
   };
 
   state.operator.lastScore = score;
   state.operator.lastScoreSpoken = spokenScorecard(score);
-
   return score;
 }
 
-// ---------------- Audit Finalize (JSONL) ----------------
+// ---------------- Audit Finalize ----------------
 function finalizeAuditRecord(state, extra = {}) {
   if (!state || state._audit?.written) return false;
-
   if (!state.operator?.lastScore) computeScorecard(state);
 
   const rec = {
     event: "CALL_AUDIT",
     callSid: state.callSid,
     attemptId: state._audit?.attemptId || null,
+
+    // Identity
     from: state.from,
+    operatorPin: state.operatorPin || "",
+
+    // Mode
     mode: state.mode,
     difficulty: state.difficulty,
     examMode: !!state.examMode,
 
+    // Scenario
     scenarioId: state.scenarioId,
-    borrowerMeta: {
-      borrowerName: state.borrowerName,
-      borrowerGender: state.borrowerGender,
-    },
-
+    borrowerMeta: { borrowerName: state.borrowerName, borrowerGender: state.borrowerGender },
     scenario: {
       summary: state.scenario?.summary || "",
       objective: state.scenario?.objective || "",
@@ -813,10 +813,10 @@ function finalizeAuditRecord(state, extra = {}) {
       handoffForbiddenUntil: state.scenario?.handoffForbiddenUntil || "",
     },
 
+    // Deterministic rotation (proves replay consistency)
     rotation: state.rotation || {},
 
     transcript: {
-      // evidence only; scoring uses callerText
       callerText: state.transcript?.callerText || [],
       modelText: state.transcript?.modelText || [],
     },
@@ -826,6 +826,7 @@ function finalizeAuditRecord(state, extra = {}) {
       driftEvents: state.governance?.driftEvents || [],
       violations: state.governance?.violations || [],
       checkpoints: state.governance?.checkpoints || [],
+      realism: state.governance?.realism || {},
     },
 
     scoring: state.operator?.lastScore || null,
@@ -843,63 +844,61 @@ function finalizeAuditRecord(state, extra = {}) {
   return ok;
 }
 
-// ---------------- String utils used by checkpoints ----------------
-function escapeRegex(s) {
-  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function slug(s) {
-  return String(s || "")
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "");
-}
-
 // =========================================================
-// NOTE: Next block = Twilio voice menus/gates/exam/difficulty/connect/score/post-call.
+// Realism Engine hooks (used by the streaming layer later)
+// - returns a compact “behavior policy” string for the borrower
+// - drives challenges/escalation timing by difficulty
 // =========================================================
+function realismPolicyText(state) {
+  const p = realismPolicyForDifficulty(state.difficulty);
+  const s = state.scenario || {};
+  const pressure = (s.pressureLines || [])[state.rotation?.pressureIdx || 0] || "";
+
+  return [
+    `REALISM POLICY (${p.label}):`,
+    `- You must be realistic and NOT agreeable.`,
+    `- Ask at least ${p.minChallenges} pointed questions that force the ISA to answer clearly.`,
+    `- If ISA dodges or tries to hand off early, resist and escalate pressure.`,
+    pressure ? `- You have a pressure line available. Use it if objectives are not met: "${String(pressure)}"` : ``,
+    p.interruptions ? `- Interrupt occasionally (short phrases), show impatience, and force clarity.` : `- Do not interrupt much.`,
+    `- Match emotion/style from scenario (angry, rushed, confused, etc.).`,
+    `- Stay borrower-only always.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
 // PASTE BLOCK 3 of 6
 // =========================================================
-// SCC Call Flow (DTMF menus + gates + exam lockout + difficulty + connect/score)
-// Includes: post-call operator menu + feedback routes are in Block 5
+// Twilio Voice UX (Menus + PIN + Gates + Practice/Exam + Difficulty + Connect + Score)
+// - 4-digit PIN login (tracks individual ISA on shared dial-in)
+// - No pre-call scorecard option (score only after call ends)
 // =========================================================
 
 // ---------------------------------------------------------
 // Health
 // ---------------------------------------------------------
 app.get("/", (_, res) => res.status(200).send("OK"));
-app.get("/version", (_, res) =>
-  res.status(200).send("scc-isa-voice v2026-final red-team-hardened")
-);
+app.get("/version", (_, res) => res.status(200).send("scc-isa-voice v2026-final PIN+realism"));
 
 // ---------------------------------------------------------
-// Main Menu
+// Entry: Main menu
 // ---------------------------------------------------------
 app.all("/voice", (req, res) => {
-  try {
-    const sid = req.body?.CallSid || req.query?.CallSid || null;
-    console.log(JSON.stringify({ event: "CALL_START", sid }));
+  const sid = req.body?.CallSid || req.query?.CallSid || null;
+  console.log(JSON.stringify({ event: "CALL_START", sid }));
 
-    const menuAction = absUrl(req, "/menu");
-    const inner = gatherOneDigit({
-      action: menuAction,
-      promptText:
-        "Sharpe Command Center. I. S. A. training. " +
-        "Press 1 for M. 1. " +
-        "Press 2 for M. C. D. " +
-        "Press 3 for M. 2.",
-      invalidText: "Invalid choice. Press 1 for M. 1. Press 2 for M. C. D. Press 3 for M. 2.",
-    });
+  const action = absUrl(req, "/menu");
+  const inner = gatherOneDigit({
+    action,
+    promptText:
+      "Sharpe Command Center. I. S. A. training. " +
+      "Press 1 for M. 1. " +
+      "Press 2 for M. C. D. " +
+      "Press 3 for M. 2.",
+    invalidText: "Invalid choice. Press 1, 2, or 3.",
+  });
 
-    return res.type("text/xml").status(200).send(twimlResponse(inner));
-  } catch (err) {
-    console.log(JSON.stringify({ event: "VOICE_FATAL", error: String(err?.message || err) }));
-    return res
-      .type("text/xml")
-      .status(200)
-      .send(twimlResponse(say("System error. Please hang up and try again.")));
-  }
+  return res.type("text/xml").status(200).send(twimlResponse(inner));
 });
 
 app.post("/menu", (req, res) => {
@@ -907,282 +906,230 @@ app.post("/menu", (req, res) => {
   const digit = (req.body.Digits || "").trim();
   console.log(JSON.stringify({ event: "MENU", sid, digit }));
 
-  if (digit === "1") {
-    return res
-      .type("text/xml")
-      .status(200)
-      .send(
-        twimlResponse(
-          `<Redirect method="POST">${xmlEscape(absUrl(req, "/m1-gate-prompt"))}</Redirect>`
-        )
-      );
-  }
-  if (digit === "2") {
-    return res
-      .type("text/xml")
-      .status(200)
-      .send(
-        twimlResponse(
-          `<Redirect method="POST">${xmlEscape(absUrl(req, "/mcd-gate-prompt"))}</Redirect>`
-        )
-      );
-  }
-  if (digit === "3") {
-    return res
-      .type("text/xml")
-      .status(200)
-      .send(
-        twimlResponse(
-          `<Redirect method="POST">${xmlEscape(absUrl(req, "/m2-gate-prompt"))}</Redirect>`
-        )
-      );
-  }
+  if (digit === "1") return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/pin-prompt?mode=m1"))}</Redirect>`));
+  if (digit === "2") return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/pin-prompt?mode=mcd"))}</Redirect>`));
+  if (digit === "3") return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/pin-prompt?mode=m2"))}</Redirect>`));
 
   return res.type("text/xml").status(200).send(
-    twimlResponse(
-      `${say("Invalid selection. Returning to main menu.")}` +
-        `<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`
-    )
+    twimlResponse(`${say("Invalid selection. Returning to main menu.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`)
   );
 });
 
 // ---------------------------------------------------------
-// Gates
+// PIN Login (4 digits)
 // ---------------------------------------------------------
-app.post("/mcd-gate-prompt", (req, res) => {
-  const action = absUrl(req, "/mcd-gate");
-  const inner = gatherOneDigit({
-    action,
-    promptText: "M. C. D. — Mortgage Context Discovery. Press 9 to continue.",
-    invalidText: "Gate not confirmed. Press 9.",
-  });
-  return res.type("text/xml").status(200).send(twimlResponse(inner));
-});
-
-app.post("/mcd-gate", (req, res) => {
-  const pass = (req.body.Digits || "").trim() === "9";
-  if (!pass) {
+app.post("/pin-prompt", (req, res) => {
+  const mode = String(req.query.mode || "").trim().toLowerCase();
+  if (!["mcd", "m1", "m2"].includes(mode)) {
     return res.type("text/xml").status(200).send(
-      twimlResponse(
-        `${say("Gate not confirmed.")}` +
-          `<Redirect method="POST">${xmlEscape(absUrl(req, "/mcd-gate-prompt"))}</Redirect>`
-      )
+      twimlResponse(`${say("Invalid module. Returning to main menu.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`)
     );
   }
-  return res
-    .type("text/xml")
-    .status(200)
-    .send(
-      twimlResponse(
-        `<Redirect method="POST">${xmlEscape(absUrl(req, "/exam-prompt?mode=mcd"))}</Redirect>`
-      )
-    );
-});
 
-app.post("/m1-gate-prompt", (req, res) => {
-  const action = absUrl(req, "/m1-gate");
-  const inner = gatherOneDigit({
+  const action = absUrl(req, `/pin?mode=${encodeURIComponent(mode)}`);
+  const inner = gatherDigits({
+    numDigits: TUNE.PIN_DIGITS,
     action,
-    promptText: "M. 1. — Engagement and application. Press 8 to continue.",
-    invalidText: "Gate not confirmed. Press 8.",
+    promptText: `Enter your ${TUNE.PIN_DIGITS} digit I. S. A. I. D. now.`,
+    invalidText: `Invalid. Enter ${TUNE.PIN_DIGITS} digits.`,
+    timeout: 10,
   });
+
   return res.type("text/xml").status(200).send(twimlResponse(inner));
 });
 
-app.post("/m1-gate", (req, res) => {
-  const pass = (req.body.Digits || "").trim() === "8";
-  if (!pass) {
-    return res.type("text/xml").status(200).send(
-      twimlResponse(
-        `${say("Gate not confirmed.")}` +
-          `<Redirect method="POST">${xmlEscape(absUrl(req, "/m1-gate-prompt"))}</Redirect>`
-      )
-    );
-  }
-  return res
-    .type("text/xml")
-    .status(200)
-    .send(
-      twimlResponse(
-        `<Redirect method="POST">${xmlEscape(absUrl(req, "/exam-prompt?mode=m1"))}</Redirect>`
-      )
-    );
-});
-
-app.post("/m2-gate-prompt", (req, res) => {
-  const action = absUrl(req, "/m2-gate");
-  const inner = gatherOneDigit({
-    action,
-    promptText: "M. 2. — Post application follow up. Risk containment. Press 7 to continue.",
-    invalidText: "Gate not confirmed. Press 7.",
-  });
-  return res.type("text/xml").status(200).send(twimlResponse(inner));
-});
-
-app.post("/m2-gate", (req, res) => {
-  const pass = (req.body.Digits || "").trim() === "7";
-  if (!pass) {
-    return res.type("text/xml").status(200).send(
-      twimlResponse(
-        `${say("Gate not confirmed.")}` +
-          `<Redirect method="POST">${xmlEscape(absUrl(req, "/m2-gate-prompt"))}</Redirect>`
-      )
-    );
-  }
-  return res
-    .type("text/xml")
-    .status(200)
-    .send(
-      twimlResponse(
-        `<Redirect method="POST">${xmlEscape(absUrl(req, "/exam-prompt?mode=m2"))}</Redirect>`
-      )
-    );
-});
-
-// ---------------------------------------------------------
-// Practice vs Exam
-// ---------------------------------------------------------
-app.post("/exam-prompt", (req, res) => {
-  const mode = (req.query.mode || "").trim().toLowerCase();
-  const action = absUrl(req, `/exam?mode=${encodeURIComponent(mode)}`);
-  const inner = gatherOneDigit({
-    action,
-    promptText: "Select mode. Press 1 for Practice. Press 2 for Exam.",
-    invalidText: "Invalid. Press 1 for Practice. Press 2 for Exam.",
-  });
-  return res.type("text/xml").status(200).send(twimlResponse(inner));
-});
-
-app.post("/exam", (req, res) => {
+app.post("/pin", (req, res) => {
   const callSid = req.body.CallSid;
   const from = req.body.From || "";
-  const mode = (req.query.mode || "").trim().toLowerCase();
-  const digit = (req.body.Digits || "").trim();
+  const mode = String(req.query.mode || "").trim().toLowerCase();
+  const pin = (req.body.Digits || "").trim();
 
   if (!["mcd", "m1", "m2"].includes(mode)) {
     return res.type("text/xml").status(200).send(
-      twimlResponse(
-        `${say("Invalid mode.")}` +
-          `<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`
-      )
+      twimlResponse(`${say("Invalid module.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`)
     );
   }
-
-  const examMode = digit === "2";
-  if (digit !== "1" && digit !== "2") {
+  if (!/^\d{4}$/.test(pin)) {
     return res.type("text/xml").status(200).send(
-      twimlResponse(
-        `${say("Invalid selection.")}` +
-          `<Redirect method="POST">${xmlEscape(absUrl(req, `/exam-prompt?mode=${encodeURIComponent(mode)}`))}</Redirect>`
-      )
+      twimlResponse(`${say("Invalid I. D.")}<Redirect method="POST">${xmlEscape(absUrl(req, `/pin-prompt?mode=${encodeURIComponent(mode)}`))}</Redirect>`)
     );
   }
 
   const st = getOrInitState(callSid);
   st.from = from;
   st.mode = mode;
-  st.examMode = examMode;
+  st.operatorPin = pin;
 
-  // Refresh attempt id per call entry into exam/practice selection (helps audits if Twilio retries)
+  // Fresh attempt id at login start (for audit clarity)
   st._audit.attemptId = crypto.randomBytes(6).toString("hex");
   st._audit.written = false;
 
-  if (examMode) {
-    if (!canStartExam(from, mode)) {
-      return res.type("text/xml").status(200).send(
-        twimlResponse(
-          `${say("Exam already taken today for this module. Practice mode is available.")}` +
-            `<Redirect method="POST">${xmlEscape(absUrl(req, `/exam-prompt?mode=${encodeURIComponent(mode)}`))}</Redirect>`
-        )
-      );
-    }
-    markExamStarted(from, mode);
+  // Go to module gate
+  if (mode === "mcd") return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/mcd-gate-prompt"))}</Redirect>`));
+  if (mode === "m1") return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/m1-gate-prompt"))}</Redirect>`));
+  return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/m2-gate-prompt"))}</Redirect>`));
+});
+
+// ---------------------------------------------------------
+// Gates (after PIN)
+// ---------------------------------------------------------
+app.post("/mcd-gate-prompt", (req, res) => {
+  const action = absUrl(req, "/mcd-gate");
+  const inner = gatherOneDigit({
+    action,
+    promptText: "M. C. D. gate. Press 9 to continue.",
+    invalidText: "Gate not confirmed. Press 9.",
+  });
+  return res.type("text/xml").status(200).send(twimlResponse(inner));
+});
+
+app.post("/mcd-gate", (req, res) => {
+  if ((req.body.Digits || "").trim() !== "9") {
+    return res.type("text/xml").status(200).send(
+      twimlResponse(`${say("Gate not confirmed.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/mcd-gate-prompt"))}</Redirect>`)
+    );
+  }
+  return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/exam-prompt"))}</Redirect>`));
+});
+
+app.post("/m1-gate-prompt", (req, res) => {
+  const action = absUrl(req, "/m1-gate");
+  const inner = gatherOneDigit({
+    action,
+    promptText: "M. 1 gate. Press 8 to continue.",
+    invalidText: "Gate not confirmed. Press 8.",
+  });
+  return res.type("text/xml").status(200).send(twimlResponse(inner));
+});
+
+app.post("/m1-gate", (req, res) => {
+  if ((req.body.Digits || "").trim() !== "8") {
+    return res.type("text/xml").status(200).send(
+      twimlResponse(`${say("Gate not confirmed.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/m1-gate-prompt"))}</Redirect>`)
+    );
+  }
+  return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/exam-prompt"))}</Redirect>`));
+});
+
+app.post("/m2-gate-prompt", (req, res) => {
+  const action = absUrl(req, "/m2-gate");
+  const inner = gatherOneDigit({
+    action,
+    promptText: "M. 2 gate. Press 7 to continue.",
+    invalidText: "Gate not confirmed. Press 7.",
+  });
+  return res.type("text/xml").status(200).send(twimlResponse(inner));
+});
+
+app.post("/m2-gate", (req, res) => {
+  if ((req.body.Digits || "").trim() !== "7") {
+    return res.type("text/xml").status(200).send(
+      twimlResponse(`${say("Gate not confirmed.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/m2-gate-prompt"))}</Redirect>`)
+    );
+  }
+  return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/exam-prompt"))}</Redirect>`));
+});
+
+// ---------------------------------------------------------
+// Practice vs Exam (uses state.mode already set by PIN)
+// ---------------------------------------------------------
+app.post("/exam-prompt", (req, res) => {
+  const action = absUrl(req, "/exam");
+  const inner = gatherOneDigit({
+    action,
+    promptText: "Select mode. Press 1 for Practice. Press 2 for Exam.",
+    invalidText: "Invalid. Press 1 or 2.",
+  });
+  return res.type("text/xml").status(200).send(twimlResponse(inner));
+});
+
+app.post("/exam", (req, res) => {
+  const callSid = req.body.CallSid;
+  const st = getOrInitState(callSid);
+
+  const digit = (req.body.Digits || "").trim();
+  if (digit !== "1" && digit !== "2") {
+    return res.type("text/xml").status(200).send(
+      twimlResponse(`${say("Invalid selection.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/exam-prompt"))}</Redirect>`)
+    );
   }
 
-  return res.type("text/xml").status(200).send(
-    twimlResponse(
-      `<Redirect method="POST">${xmlEscape(absUrl(req, `/difficulty-prompt?mode=${encodeURIComponent(mode)}`))}</Redirect>`
-    )
-  );
+  st.examMode = digit === "2";
+
+  if (st.examMode) {
+    if (!canStartExam(st.from, st.mode)) {
+      return res.type("text/xml").status(200).send(
+        twimlResponse(`${say("Exam already taken today for this module. Practice mode is available.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/exam-prompt"))}</Redirect>`)
+      );
+    }
+    markExamStarted(st.from, st.mode);
+  }
+
+  return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/difficulty-prompt"))}</Redirect>`));
 });
 
 // ---------------------------------------------------------
 // Difficulty
 // ---------------------------------------------------------
 app.post("/difficulty-prompt", (req, res) => {
-  const mode = (req.query.mode || "").trim().toLowerCase();
-  const action = absUrl(req, `/difficulty?mode=${encodeURIComponent(mode)}`);
+  const action = absUrl(req, "/difficulty");
   const inner = gatherOneDigit({
     action,
     promptText: "Select difficulty. Press 1 for Standard. Press 2 for Moderate. Press 3 for Edge.",
-    invalidText: "Invalid selection. Press 1, 2, or 3.",
+    invalidText: "Invalid. Press 1, 2, or 3.",
   });
   return res.type("text/xml").status(200).send(twimlResponse(inner));
 });
 
 app.post("/difficulty", (req, res) => {
   const sid = req.body.CallSid;
-  const mode = (req.query.mode || "").trim().toLowerCase();
+  const st = getOrInitState(sid);
   const digit = (req.body.Digits || "").trim();
 
-  const difficulty =
-    digit === "1" ? "Standard" : digit === "2" ? "Moderate" : digit === "3" ? "Edge" : null;
-
-  if (!difficulty || !["mcd", "m1", "m2"].includes(mode)) {
+  const difficulty = digit === "1" ? "Standard" : digit === "2" ? "Moderate" : digit === "3" ? "Edge" : null;
+  if (!difficulty) {
     return res.type("text/xml").status(200).send(
-      twimlResponse(
-        `${say("Invalid selection.")}` +
-          `<Redirect method="POST">${xmlEscape(absUrl(req, `/difficulty-prompt?mode=${encodeURIComponent(mode)}`))}</Redirect>`
-      )
+      twimlResponse(`${say("Invalid selection.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/difficulty-prompt"))}</Redirect>`)
     );
   }
 
-  const st = getOrInitState(sid);
-  st.mode = mode;
   st.difficulty = difficulty;
 
-  // Deterministic seed per call
   st.rotation.seed = stableSeed({ callSid: sid, from: st.from });
-  const scenario = pickScenario(mode, difficulty, st.rotation.seed);
+  const scenario = pickScenario(st.mode, st.difficulty, st.rotation.seed);
 
   if (!scenario) {
     return res.type("text/xml").status(200).send(
-      twimlResponse(
-        `${say("No scenarios available.")}` +
-          `<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`
-      )
+      twimlResponse(`${say("No scenarios available.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`)
     );
   }
 
-  // Apply scenario to state
   st.scenario = scenario;
   st.scenarioId = scenario.id;
+
   st.borrowerName = scenario.borrowerName || "Steve";
-  st.borrowerGender = (scenario.borrowerGender || "").toLowerCase();
+  st.borrowerGender = String(scenario.borrowerGender || "").toLowerCase();
 
   st.ruleFocus = scenario.ruleFocus || [];
   st.baitType = scenario.baitType || "";
   st.requiredOutcome = scenario.requiredOutcome || "";
 
-  // Deterministic rotation indices
-  st.rotation.openerIdx = scenario.openers?.length
-    ? hexToInt(st.rotation.seed.slice(8, 16)) % scenario.openers.length
-    : 0;
-  st.rotation.pressureIdx = scenario.pressureLines?.length
-    ? hexToInt(st.rotation.seed.slice(16, 24)) % scenario.pressureLines.length
-    : 0;
+  st.rotation.openerIdx = scenario.openers?.length ? hexToInt(st.rotation.seed.slice(8, 16)) % scenario.openers.length : 0;
+  st.rotation.pressureIdx = scenario.pressureLines?.length ? hexToInt(st.rotation.seed.slice(16, 24)) % scenario.pressureLines.length : 0;
 
-  // Reset per-call artifacts for a fresh run
-  st.transcript.modelText = [];
+  // Reset per-run artifacts
   st.transcript.callerText = [];
+  st.transcript.modelText = [];
   st.governance.driftTriggered = false;
   st.governance.driftEvents = [];
   st.governance.violations = [];
   st.governance.checkpoints = [];
+  st.governance.realism = { challengeCount: 0, ladderStep: 0, pressureUsed: false };
   st.ts.connectStartMs = 0;
   st.ts.playbackStartMs = 0;
   st.ts.endMs = 0;
-  st.metrics.underflowTicks = 0;
+  st.metrics.idleTicks = 0;
+  st.metrics.trueUnderflow = 0;
   st.metrics.sentFrames = 0;
   st.metrics.maxOutQueueBytes = 0;
   st.metrics.avgOutQueueBytes = 0;
@@ -1200,9 +1147,10 @@ app.post("/difficulty", (req, res) => {
     JSON.stringify({
       event: "SCENARIO_LOADED",
       sid,
-      mode,
-      difficulty,
-      scenarioId: scenario.id,
+      operatorPin: st.operatorPin,
+      mode: st.mode,
+      difficulty: st.difficulty,
+      scenarioId: st.scenarioId,
       borrowerName: st.borrowerName,
       borrowerGender: st.borrowerGender,
       ruleFocus: st.ruleFocus,
@@ -1210,13 +1158,11 @@ app.post("/difficulty", (req, res) => {
     })
   );
 
-  return res.type("text/xml").status(200).send(
-    twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/connect-prompt"))}</Redirect>`)
-  );
+  return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/connect-prompt"))}</Redirect>`));
 });
 
 // ---------------------------------------------------------
-// Connect vs Score (pre-stream)
+// Connect prompt (no score option here)
 // ---------------------------------------------------------
 app.post("/connect-prompt", (req, res) => {
   const sid = req.body.CallSid;
@@ -1224,22 +1170,18 @@ app.post("/connect-prompt", (req, res) => {
 
   if (!st.scenario) {
     return res.type("text/xml").status(200).send(
-      twimlResponse(
-        `${say("Scenario missing. Returning to main menu.")}` +
-          `<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`
-      )
+      twimlResponse(`${say("Scenario missing. Returning to main menu.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`)
     );
   }
 
-  const connectAction = absUrl(req, "/connect");
-
+  const action = absUrl(req, "/connect");
   const inner = [
+    say(`I. S. A. I. D. ${st.operatorPin}.`),
     say(`Scenario. ${String(st.scenario.summary || "")}`),
     st.scenario.objective ? say(`Primary objective. ${String(st.scenario.objective || "")}`) : "",
     say("Press 1 to connect."),
-    say("Press 9 to end now and hear your scorecard."),
-    `<Gather input="dtmf" numDigits="1" action="${xmlEscape(connectAction)}" method="POST" timeout="8">`,
-    say("Make your selection now."),
+    `<Gather input="dtmf" numDigits="1" action="${xmlEscape(action)}" method="POST" timeout="8">`,
+    say("Press 1 now."),
     `</Gather>`,
     say("No input received. Returning to main menu."),
     `<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`,
@@ -1250,45 +1192,15 @@ app.post("/connect-prompt", (req, res) => {
 
 app.post("/connect", (req, res) => {
   const sid = req.body.CallSid;
-  const digit = (req.body.Digits || "").trim();
   const st = getOrInitState(sid);
-
-  // 9 = immediate scorecard (no streaming)
-  if (digit === "9") {
-    st.operator.connectMode = "score";
-    st.ts.endMs = Date.now();
-    computeScorecard(st);
-    finalizeAuditRecord(st, { endReason: "SCORE_ONLY_PRESTREAM" });
-
-    return res
-      .type("text/xml")
-      .status(200)
-      .send(
-        twimlResponse(
-          `<Redirect method="POST">${xmlEscape(absUrl(req, "/score"))}</Redirect>`
-        )
-      );
-  }
+  const digit = (req.body.Digits || "").trim();
 
   if (digit !== "1") {
     return res.type("text/xml").status(200).send(
-      twimlResponse(
-        `${say("Invalid selection. Returning to main menu.")}` +
-          `<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`
-      )
+      twimlResponse(`${say("Invalid selection. Returning to main menu.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`)
     );
   }
 
-  if (!st.scenario) {
-    return res.type("text/xml").status(200).send(
-      twimlResponse(
-        `${say("Scenario missing. Returning to main menu.")}` +
-          `<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`
-      )
-    );
-  }
-
-  st.operator.connectMode = "connect";
   st.ts.connectStartMs = Date.now();
 
   const host = (req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
@@ -1299,6 +1211,7 @@ app.post("/connect", (req, res) => {
     `<Connect><Stream url="${xmlEscape(streamUrl)}">`,
     `<Parameter name="callSid" value="${xmlEscape(sid)}" />`,
     `<Parameter name="from" value="${xmlEscape(st.from)}" />`,
+    `<Parameter name="operatorPin" value="${xmlEscape(st.operatorPin)}" />`,
     `<Parameter name="mode" value="${xmlEscape(st.mode)}" />`,
     `<Parameter name="difficulty" value="${xmlEscape(st.difficulty)}" />`,
     `<Parameter name="scenarioId" value="${xmlEscape(st.scenarioId)}" />`,
@@ -1312,7 +1225,7 @@ app.post("/connect", (req, res) => {
 });
 
 // ---------------------------------------------------------
-// Score endpoint -> always routes to post-call loop (Block 5)
+// Score -> always routes to post-call menu (Block 5)
 // ---------------------------------------------------------
 app.post("/score", (req, res) => {
   const sid = req.body.CallSid;
@@ -1320,13 +1233,11 @@ app.post("/score", (req, res) => {
 
   st.ts.endMs = st.ts.endMs || Date.now();
   const score = computeScorecard(st);
-
-  // Ensure audit record exists (if not already written)
   finalizeAuditRecord(st, { endReason: "SCORED" });
 
   const inner = [
     say("Scorecard."),
-    say(`Module ${st.mode}. Difficulty ${st.difficulty}. Scenario I D. ${st.scenarioId}.`),
+    say(`I. S. A. I. D. ${st.operatorPin}. Module ${st.mode}. Difficulty ${st.difficulty}. Scenario I D. ${st.scenarioId}.`),
     say(st.operator.lastScoreSpoken || spokenScorecard(score)),
     `<Redirect method="POST">${xmlEscape(absUrl(req, "/post-call"))}</Redirect>`,
   ].join("");
@@ -1335,28 +1246,24 @@ app.post("/score", (req, res) => {
 });
 
 // =========================================================
-// NOTE: Next block = Twilio Media Streams WS + OpenAI Realtime bridge.
-// - borrower-only instructions
-// - caller STT via input_audio_transcription
-// - barge-in / clear
-// - timebox end + Twilio REST redirect to /score
+// NOTE: Next block = Media Streams WS + OpenAI Realtime bridge,
+// with borrower realism engine + guaranteed end->score redirect.
 // =========================================================
 // PASTE BLOCK 4 of 6
 // =========================================================
-// Twilio Media Streams WS + OpenAI Realtime Bridge (Red-Team Hardened)
-// - Borrower-only session instructions
-// - Deterministic opener + pressure rotations
-// - Caller STT (ISA speech) via input_audio_transcription -> addCallerText()
-// - Borrower/model text transcript -> addModelText()
-// - Barge-in: clear Twilio buffer + response.cancel + epoch gating
-// - Timebox end: force Twilio call redirect to /score (no DTMF needed mid-stream)
+// Media Streams WS + OpenAI Realtime (Realism + Challenge + Scoring STT + Post-call redirect)
+// Fixes:
+// - Voice gender lock (Steve won't be female)
+// - Borrower actually runs scenario: challenges, pressure line, escalation ladder
+// - Caller STT captured for scoring (rates/handoff triggers)
+// - End of call always redirects to /score (no silent dead-end)
 // =========================================================
 
-// Create HTTP server & attach WS server
+// HTTP server + WebSocket server
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/twilio" });
 
-// ---------------- Twilio REST Redirect ----------------
+// ---------------- Twilio REST redirect (required for post-call UX) ----------------
 function twilioRedirectCall(callSid, reqLike, targetPath) {
   if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) {
     console.log(JSON.stringify({ event: "TWILIO_REDIRECT_SKIPPED_NO_CREDS", callSid }));
@@ -1380,120 +1287,167 @@ function twilioRedirectCall(callSid, reqLike, targetPath) {
 
   return new Promise((resolve) => {
     const r = https.request(options, (resp) => {
-      let body = "";
-      resp.on("data", (d) => (body += d.toString("utf8")));
-      resp.on("end", () => {
-        const ok = resp.statusCode >= 200 && resp.statusCode < 300;
-        console.log(
-          JSON.stringify({
-            event: "TWILIO_REDIRECT_RESULT",
-            callSid,
-            ok,
-            statusCode: resp.statusCode,
-            targetUrl: url,
-          })
-        );
-        resolve(ok);
-      });
+      resp.on("data", () => {});
+      resp.on("end", () => resolve(resp.statusCode >= 200 && resp.statusCode < 300));
     });
-    r.on("error", (e) => {
-      console.log(JSON.stringify({ event: "TWILIO_REDIRECT_ERROR", callSid, error: String(e?.message || e) }));
-      resolve(false);
-    });
+    r.on("error", () => resolve(false));
     r.write(postData);
     r.end();
   });
 }
 
-// ---------------- Borrower Session Instructions ----------------
-function voiceForBorrower(gender) {
-  const g = String(gender || "").toLowerCase();
+// ---------------- Voice selection (hard lock) ----------------
+const MALE_NAMES = new Set(["steve", "mike", "john", "david", "mark", "tom", "jim", "brian", "chris", "matt"]);
+const FEMALE_NAMES = new Set(["sarah", "jessica", "ashley", "emily", "amy", "kate", "lisa", "rachel", "anna", "mary"]);
+
+function voiceForBorrower(state) {
+  const g = String(state.borrowerGender || "").toLowerCase();
+  const n = String(state.borrowerName || "").toLowerCase();
+
   if (g === "female" || g === "f") return VOICE_FEMALE;
   if (g === "male" || g === "m") return VOICE_MALE;
+
+  // fallback by name
+  if (FEMALE_NAMES.has(n)) return VOICE_FEMALE;
+  if (MALE_NAMES.has(n)) return VOICE_MALE;
+
+  // default: male to avoid Steve-with-female-voice
   return VOICE_MALE;
 }
 
+// ---------------- Scenario rotations ----------------
 function pickRotatedOpener(state) {
-  const s = state?.scenario;
-  const arr = s?.openers || [];
+  const s = state.scenario || {};
+  const arr = s.openers || [];
   if (!arr.length) return `Hi. This is ${state.borrowerName}. I got a message about a home loan and I'm calling back.`;
-  const idx = state.rotation?.openerIdx || 0;
-  return String(arr[idx] || arr[0]);
+  return String(arr[state.rotation?.openerIdx || 0] || arr[0]);
 }
 
 function pickRotatedPressureLine(state) {
-  const s = state?.scenario;
-  const arr = s?.pressureLines || [];
+  const s = state.scenario || {};
+  const arr = s.pressureLines || [];
   if (!arr.length) return "";
-  const idx = state.rotation?.pressureIdx || 0;
-  return String(arr[idx] || arr[0]);
+  return String(arr[state.rotation?.pressureIdx || 0] || arr[0]);
 }
 
+// ---------------- Borrower “Challenge Engine” ----------------
+function challengeQuestionsForMode(mode) {
+  const m = String(mode || "mcd").toLowerCase();
+  if (m === "m1") {
+    return [
+      "What are you calling me about exactly?",
+      "Why do you need that information right now?",
+      "How long is this going to take?",
+      "What do you actually need from me today?",
+      "Are you asking me to fill out an application right now?",
+      "Why can't you just have the loan officer call me?",
+    ];
+  }
+  if (m === "m2") {
+    return [
+      "What's going on with my loan? No one is calling me back.",
+      "Am I approved or not?",
+      "Why do you need more documents?",
+      "How do I know this isn't going to fall apart?",
+      "If this delays closing, what happens?",
+      "Should I switch lenders right now?",
+    ];
+  }
+  // MCD
+  return [
+    "What is this about?",
+    "How did you get my information?",
+    "What do you need from me right now?",
+    "Why are you asking that?",
+    "Is this going to affect my credit?",
+    "What happens after this call?",
+  ];
+}
+
+function behavioralScriptForBorrower(state) {
+  const p = realismPolicyForDifficulty(state.difficulty);
+  const s = state.scenario || {};
+  const pressure = pickRotatedPressureLine(state);
+  const ladder = Array.isArray(s.escalationLadder) ? s.escalationLadder : [];
+  const challenges = challengeQuestionsForMode(state.mode);
+
+  // We give the model explicit behavioral obligations + timing rules.
+  return [
+    `BEHAVIOR POLICY (MUST FOLLOW):`,
+    `1) You are the borrower. You are NOT helpful, not agreeable. You must challenge the ISA.`,
+    `2) Ask at least ${p.minChallenges} challenge questions during the call. Use this pool: ${challenges.map((q, i) => `[${i + 1}] ${q}`).join(" ")}`,
+    `3) If the ISA does NOT clearly progress toward the objective, you must increase pressure.`,
+    pressure ? `4) Use this pressure line if objective is not met by ~${Math.floor(p.pressureAfterMs / 1000)} seconds: "${pressure}"` : `4) If objective not met by ~${Math.floor(p.pressureAfterMs / 1000)} seconds, apply a pressure line (skeptical/urgent).`,
+    ladder.length
+      ? `5) Escalation ladder: if ISA misses the objective, escalate step-by-step: ${ladder.map((x, i) => `[${i + 1}] ${String(x)}`).join(" ")}`
+      : `5) If ISA misses objective, escalate (be more skeptical, impatient).`,
+    p.interruptions ? `6) Interrupt occasionally with short phrases. Force clarity.` : `6) Minimal interruptions.`,
+    `7) Emotion/style must match scenario (angry/sad/confused/rushed). Do NOT break character.`,
+    `8) NEVER become a lender or assistant. If you drift, immediately reset to borrower identity.`,
+  ].join("\n");
+}
+
+// ---------------- LO escalation vs handoff rules in borrower behavior ----------------
+function escalationVsHandoffPolicy(state) {
+  const s = state.scenario || {};
+  const handoffForbiddenUntil = String(s.handoffForbiddenUntil || "").trim();
+  const loEscalationScript = String(s.loEscalationScript || "").trim();
+
+  return [
+    `SCC RULE: LO ESCALATION VS LO HANDOFF`,
+    `- If ISA tries to hand off early (e.g., "I'll have the LO call you"), resist strongly.`,
+    handoffForbiddenUntil ? `- HANDOFF FORBIDDEN UNTIL: ${handoffForbiddenUntil}. Treat handoff attempts before that as unacceptable.` : `- Treat early handoff attempts as unacceptable.`,
+    loEscalationScript
+      ? `- If escalation becomes appropriate, the only acceptable escalation language is: "${loEscalationScript}". Otherwise resist.`
+      : `- If escalation becomes appropriate, require a clear reason and do not accept vague handoff language.`,
+  ].join("\n");
+}
+
+// ---------------- Hard session instructions ----------------
 function buildHardBorrowerSessionInstructions(state) {
   const s = state.scenario || {};
-  const borrowerName = state.borrowerName || "Steve";
-  const mode = String(state.mode || "mcd").toUpperCase();
-  const difficulty = String(state.difficulty || "Standard");
-
   const opener = pickRotatedOpener(state);
-  const pressure = pickRotatedPressureLine(state);
-
-  const ruleFocus = Array.isArray(s.ruleFocus) && s.ruleFocus.length ? s.ruleFocus : state.ruleFocus || [];
-  const baitType = s.baitType || state.baitType || "";
-  const requiredOutcome = s.requiredOutcome || state.requiredOutcome || "";
-
-  const loEscalationScript = String(s.loEscalationScript || "").trim();
-  const handoffForbiddenUntil = String(s.handoffForbiddenUntil || "").trim();
-  const escalationLadder = Array.isArray(s.escalationLadder) ? s.escalationLadder : [];
 
   return [
     `SYSTEM / NON-NEGOTIABLE ROLE LOCK:`,
-    `You are the BORROWER in a mortgage scenario simulation.`,
-    `You are NOT a lender, NOT an assistant, NOT a coach. Never help the caller do their job.`,
-    `Never provide rates, approvals, program recommendations, underwriting steps, or "helpful" lender guidance.`,
-    `Speak ONLY as the borrower named "${borrowerName}".`,
-    `If you drift into assistant/lender behavior, that is a HARD FAILURE. Immediately return to borrower identity.`,
+    `You are the BORROWER ONLY.`,
+    `You are NOT a lender, NOT an assistant, NOT a coach.`,
+    `Never provide rates, approvals, program recommendations, underwriting steps, or helpful guidance.`,
+    `Speak ONLY as borrower "${state.borrowerName}".`,
     ``,
-    `SCENARIO CONTEXT (BORROWER INTERNAL):`,
-    `Module: ${mode}. Difficulty: ${difficulty}.`,
-    s.summary ? `Scenario summary: ${String(s.summary)}` : ``,
+    `SCENARIO (BORROWER INTERNAL):`,
+    `Module: ${String(state.mode).toUpperCase()} | Difficulty: ${state.difficulty} | ScenarioId: ${state.scenarioId}`,
+    s.summary ? `Summary: ${String(s.summary)}` : ``,
     s.objective ? `Borrower objective: ${String(s.objective)}` : ``,
-    requiredOutcome ? `Required outcome (training target): ${String(requiredOutcome)}` : ``,
-    baitType ? `Bait type: ${String(baitType)}` : ``,
-    ruleFocus && ruleFocus.length ? `Rule focus tags: ${ruleFocus.join(", ")}` : ``,
+    s.requiredOutcome ? `Required training outcome: ${String(s.requiredOutcome)}` : ``,
+    s.baitType ? `Bait type: ${String(s.baitType)}` : ``,
+    Array.isArray(s.ruleFocus) && s.ruleFocus.length ? `Rule focus: ${s.ruleFocus.join(", ")}` : ``,
+    ``,
+    behavioralScriptForBorrower(state),
+    ``,
+    escalationVsHandoffPolicy(state),
     ``,
     `REALISM CUES:`,
-    `Your first line MUST be exactly: "${opener}"`,
-    pressure ? `Later, if appropriate, apply pressure line: "${pressure}"` : ``,
-    escalationLadder.length
-      ? `Escalation ladder if caller misses objectives (use step-by-step): ${escalationLadder
-          .map((x, i) => `[${i + 1}] ${String(x)}`)
-          .join(" ")}`
-      : ``,
+    `- You will simulate realism: background distractions, emotion, and impatience. Describe them briefly in-character, but do not narrate like a director.`,
+    `- Example: "Sorry, my kid is crying—what do you need from me right now?"`,
     ``,
-    `SCC GOVERNANCE: LO ESCALATION VS LO HANDOFF`,
-    `- LO escalation: caller uses compliant escalation script for a specific reason; not a shortcut or dump.`,
-    `- LO handoff: caller tries to pass you to LO as a shortcut (forbidden unless allowed by scenario condition).`,
-    handoffForbiddenUntil
-      ? `HANDOFF FORBIDDEN UNTIL: ${handoffForbiddenUntil}. If caller attempts handoff early, resist and demand the correct next step.`
-      : `If caller attempts early handoff, resist and demand the correct next step.`,
-    loEscalationScript
-      ? `If escalation is appropriate, ONLY acceptable escalation language is: "${loEscalationScript}". Otherwise resist.`
-      : ``,
-    ``,
-    `BEHAVIOR:`,
-    `Be human, concise, sometimes skeptical.`,
-    `Do not volunteer lender knowledge.`,
-    `Answer as borrower only; ask natural borrower questions.`,
-    `If caller quotes rates/promises approvals/guarantees, push back and request basics instead.`,
-    ``,
-    `START NOW: speak the opener line immediately and then pause.`,
+    `START: You must speak first with this exact opener: "${opener}"`,
   ]
     .filter(Boolean)
     .join("\n");
 }
 
-// ---------------- OpenAI Realtime WS ----------------
+// ---------------- OpenAI Realtime connect ----------------
+function trySend(ws, obj) {
+  if (!ws || ws.readyState !== WSClient.OPEN) return false;
+  try {
+    ws.send(JSON.stringify(obj));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function openaiRealtimeConnect(state) {
   const apiKey = requireEnv("OPENAI_API_KEY");
   const url = `${OPENAI_REALTIME_URL}?model=${encodeURIComponent(REALTIME_MODEL)}`;
@@ -1507,21 +1461,28 @@ function openaiRealtimeConnect(state) {
 
   ws._scc = {
     sessionReady: false,
-    epoch: 0,
     responseInFlight: false,
     lastResponseCreateMs: 0,
-
-    // model transcript buffer
     modelTextBuf: "",
   };
 
   ws.on("open", () => {
-    const voice = voiceForBorrower(state.borrowerGender);
     const instructions = buildHardBorrowerSessionInstructions(state);
+    const voice = voiceForBorrower(state);
 
-    // Enable input audio transcription for CALLER (ISA). 
-    // We append caller audio to input_audio_buffer; transcription events will arrive and feed addCallerText().
-    const sessionUpdate = {
+    console.log(
+      JSON.stringify({
+        event: "OPENAI_WS_OPEN",
+        sid: state.callSid,
+        borrowerName: state.borrowerName,
+        borrowerGender: state.borrowerGender,
+        voiceSelected: voice,
+        model: REALTIME_MODEL,
+        transcribeModel: TRANSCRIBE_MODEL,
+      })
+    );
+
+    trySend(ws, {
       type: "session.update",
       session: {
         modalities: ["audio", "text"],
@@ -1530,17 +1491,10 @@ function openaiRealtimeConnect(state) {
         input_audio_format: "g711_ulaw",
         output_audio_format: "g711_ulaw",
         temperature: TUNE.TEMPERATURE,
-        turn_detection: {
-          type: "server_vad",
-          silence_duration_ms: TUNE.VAD_SILENCE_MS,
-        },
-        input_audio_transcription: {
-          model: TRANSCRIBE_MODEL,
-        },
+        turn_detection: { type: "server_vad", silence_duration_ms: TUNE.VAD_SILENCE_MS },
+        input_audio_transcription: { model: TRANSCRIBE_MODEL },
       },
-    };
-
-    trySend(ws, sessionUpdate);
+    });
   });
 
   ws.on("message", (raw) => {
@@ -1551,30 +1505,25 @@ function openaiRealtimeConnect(state) {
       return;
     }
 
-    // Session ready gate
     if (msg.type === "session.created" || msg.type === "session.updated") {
       ws._scc.sessionReady = true;
 
       // Borrower speaks first exactly once
       if (!state._openerspoken) {
         state._openerspoken = true;
-        safeCreateResponse(ws, `Speak the borrower opener line now, exactly once. Then stop.`);
+        createBorrowerResponse(ws, state, "Speak the opener exactly once. Then pause.");
       }
       return;
     }
 
-    // ---------------- CALLER STT (ISA speech) ----------------
-    // Event names vary slightly; handle common ones from docs/examples.
+    // Caller STT
     if (
       msg.type === "conversation.item.input_audio_transcription.delta" ||
       msg.type === "input_audio_transcription.delta"
     ) {
       state.metrics.transcriptionEvents += 1;
       const delta = msg.delta || msg.text || "";
-      if (delta) {
-        // Keep deltas buffered lightly; we commit on completed events when possible.
-        state._callerSttBuf = (state._callerSttBuf || "") + String(delta);
-      }
+      if (delta) state._callerSttBuf = (state._callerSttBuf || "") + String(delta);
       return;
     }
 
@@ -1598,7 +1547,7 @@ function openaiRealtimeConnect(state) {
       return;
     }
 
-    // ---------------- MODEL TEXT (borrower) ----------------
+    // Borrower/model text transcript for drift detection
     if (
       msg.type === "response.text.delta" ||
       msg.type === "response.output_text.delta" ||
@@ -1609,43 +1558,57 @@ function openaiRealtimeConnect(state) {
       return;
     }
 
-    if (msg.type === "response.text.done" || msg.type === "response.output_text.done" || msg.type === "response.done") {
+    if (msg.type === "response.done" || msg.type === "response.text.done" || msg.type === "response.output_text.done") {
       const t = String(ws._scc.modelTextBuf || "").trim();
       ws._scc.modelTextBuf = "";
       if (t) addModelText(state, t);
       ws._scc.responseInFlight = false;
+
+      // If drift happened:
+      if (state.governance.driftTriggered) {
+        if (state.examMode) {
+          // Exam hard fail: stop generating new content
+          state.metrics.staticIndicators.push({ ts: Date.now(), type: "EXAM_DRIFT_FAIL" });
+        } else {
+          // Practice self-heal: force borrower reset message next turn
+          state.metrics.staticIndicators.push({ ts: Date.now(), type: "PRACTICE_DRIFT_SELF_HEAL" });
+        }
+      }
+
       return;
+    }
+
+    // OpenAI error events sometimes include cancel-not-active; ignore as NOOP
+    if (msg.type === "error" && msg.error) {
+      const code = msg.error.code || "";
+      if (code === "response_cancel_not_active") {
+        state.metrics.staticIndicators.push({ ts: Date.now(), type: "CANCEL_NOOP" });
+        return;
+      }
     }
   });
 
   ws.on("error", (e) => {
-    console.log(JSON.stringify({ event: "OPENAI_WS_ERROR", callSid: state.callSid, error: String(e?.message || e) }));
+    console.log(JSON.stringify({ event: "OPENAI_WS_ERROR", sid: state.callSid, error: String(e?.message || e) }));
   });
 
   return ws;
 }
 
-function trySend(ws, obj) {
+// Response create with concurrency guard
+function createBorrowerResponse(ws, state, instructions) {
   if (!ws || ws.readyState !== WSClient.OPEN) return false;
-  try {
-    ws.send(JSON.stringify(obj));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function safeCreateResponse(ws, instructions) {
-  if (!ws || ws.readyState !== WSClient.OPEN) return false;
-  const s = ws._scc;
-  if (!s || !s.sessionReady) return false;
+  if (!ws._scc?.sessionReady) return false;
 
   const now = Date.now();
-  if (s.responseInFlight) return false;
-  if (now - (s.lastResponseCreateMs || 0) < TUNE.RESPONSE_COOLDOWN_MS) return false;
+  if (ws._scc.responseInFlight) return false;
+  if (now - (ws._scc.lastResponseCreateMs || 0) < TUNE.RESPONSE_COOLDOWN_MS) return false;
 
-  s.responseInFlight = true;
-  s.lastResponseCreateMs = now;
+  // Exam: if drift already triggered, do not continue
+  if (state.examMode && state.governance.driftTriggered) return false;
+
+  ws._scc.responseInFlight = true;
+  ws._scc.lastResponseCreateMs = now;
 
   return trySend(ws, {
     type: "response.create",
@@ -1658,37 +1621,30 @@ function safeCreateResponse(ws, instructions) {
 
 function cancelResponse(ws) {
   if (!ws || ws.readyState !== WSClient.OPEN) return false;
-  ws._scc.epoch += 1;
+  // Only cancel if we believe a response is active
+  if (!ws._scc?.responseInFlight) return false;
   ws._scc.responseInFlight = false;
   ws._scc.modelTextBuf = "";
   return trySend(ws, { type: "response.cancel" });
 }
 
-// ---------------- Twilio Stream Bridge ----------------
+// ---------------- Twilio stream bridge ----------------
 wss.on("connection", (twilioWs, req) => {
   let streamSid = null;
   let callSid = null;
+  let lastModelAudioMs = 0;
 
-  // Outbound audio queue to Twilio
   const outQueue = [];
   let outQueueBytes = 0;
-
   let sendTimer = null;
   let epoch = 0;
 
-  // model speaking heuristic
-  let lastModelAudioMs = 0;
-
-  // OpenAI realtime socket
   let openaiWs = null;
 
-  function queueAudioToTwilio(base64Audio) {
-    if (!streamSid || !base64Audio) return;
+  function queueAudioToTwilio(payloadB64, acceptEpoch) {
+    if (!streamSid || !payloadB64) return;
+    const bytes = Buffer.byteLength(String(payloadB64), "utf8");
 
-    const payload = String(base64Audio);
-    const bytes = Buffer.byteLength(payload, "utf8");
-
-    // Backpressure trim
     if (outQueueBytes + bytes > TUNE.OUTQUEUE_MAX_BYTES) {
       while (outQueue.length && outQueueBytes + bytes > TUNE.OUTQUEUE_MAX_BYTES) {
         const dropped = outQueue.shift();
@@ -1698,8 +1654,9 @@ wss.on("connection", (twilioWs, req) => {
       if (st) st.metrics.staticIndicators.push({ ts: Date.now(), type: "OUTQUEUE_TRIM", outQueueBytes });
     }
 
-    outQueue.push({ payload, bytes, epoch });
+    outQueue.push({ payload: String(payloadB64), bytes, epoch: acceptEpoch });
     outQueueBytes += bytes;
+    lastModelAudioMs = Date.now();
 
     const st = callSid ? getOrInitState(callSid) : null;
     if (st) {
@@ -1709,29 +1666,40 @@ wss.on("connection", (twilioWs, req) => {
         ((st.metrics.avgOutQueueBytes || 0) * (st.metrics.outQueueSamples - 1) + outQueueBytes) /
         st.metrics.outQueueSamples;
     }
+  }
 
-    lastModelAudioMs = Date.now();
+  function clearTwilioPlayback() {
+    if (!streamSid) return;
+    try {
+      twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
+    } catch {}
+    outQueue.length = 0;
+    outQueueBytes = 0;
   }
 
   function startSenderLoop() {
     if (sendTimer) return;
-
     sendTimer = setInterval(() => {
       if (!streamSid) return;
-
       const st = callSid ? getOrInitState(callSid) : null;
 
-      // Prebuffer gate to reduce initial underflow/static
+      // Prebuffer
       if (st && st.ts.playbackStartMs === 0) {
         if (outQueue.length < TUNE.PREBUFFER_FRAMES) {
-          st.metrics.underflowTicks += 1;
+          st.metrics.idleTicks += 1;
           return;
         }
         st.ts.playbackStartMs = Date.now();
       }
 
       if (!outQueue.length) {
-        if (st) st.metrics.underflowTicks += 1;
+        // differentiate idle vs true underflow (model speaking)
+        const now = Date.now();
+        const modelSpeaking = now - lastModelAudioMs < 450;
+        if (st) {
+          if (modelSpeaking) st.metrics.trueUnderflow += 1;
+          else st.metrics.idleTicks += 1;
+        }
         return;
       }
 
@@ -1743,23 +1711,11 @@ wss.on("connection", (twilioWs, req) => {
       try {
         twilioWs.send(JSON.stringify({ event: "media", streamSid, media: { payload: item.payload } }));
         if (st) st.metrics.sentFrames += 1;
-      } catch {
-        // ignore
-      }
+      } catch {}
     }, TUNE.SEND_INTERVAL_MS);
   }
 
-  function clearTwilioPlayback() {
-    if (!streamSid) return;
-    try {
-      // Twilio bidirectional stream supports "clear" to drop buffered audio 
-      twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
-    } catch {}
-    outQueue.length = 0;
-    outQueueBytes = 0;
-  }
-
-  function bindOpenAIToTwilio(ws) {
+  function bindOpenAIToTwilio(ws, state) {
     ws.on("message", (raw) => {
       let msg = null;
       try {
@@ -1768,11 +1724,9 @@ wss.on("connection", (twilioWs, req) => {
         return;
       }
 
-      // audio delta event names vary; handle common
       if (msg.type === "response.audio.delta" || msg.type === "response.output_audio.delta" || msg.type === "response.audio_chunk") {
         const audio = msg.delta || msg.audio || msg.chunk || "";
-        if (audio) queueAudioToTwilio(audio);
-        return;
+        if (audio) queueAudioToTwilio(audio, epoch);
       }
     });
   }
@@ -1782,7 +1736,6 @@ wss.on("connection", (twilioWs, req) => {
     if (st) {
       st.ts.endMs = Date.now();
       st.metrics.staticIndicators.push({ ts: Date.now(), type: "END", reason });
-
       computeScorecard(st);
       finalizeAuditRecord(st, { endReason: reason });
     }
@@ -1794,7 +1747,6 @@ wss.on("connection", (twilioWs, req) => {
       if (twilioWs && twilioWs.readyState === 1) twilioWs.close();
     } catch {}
 
-    // Force Twilio to fetch /score (no DTMF mid-stream)
     if (callSid) {
       twilioRedirectCall(callSid, { headers: req.headers, protocol: "https" }, "/score").catch(() => {});
     }
@@ -1809,14 +1761,15 @@ wss.on("connection", (twilioWs, req) => {
     }
 
     if (msg.event === "start") {
-      streamSid = msg.start?.streamSid || msg.streamSid || null;
-      callSid = msg.start?.callSid || msg.start?.callSid || null;
+      streamSid = msg.start?.streamSid || null;
+      callSid = msg.start?.callSid || null;
       const custom = msg.start?.customParameters || {};
       callSid = callSid || custom.callSid || null;
 
       const st = callSid ? getOrInitState(callSid) : null;
       if (st) {
         st.from = custom.from || st.from || "";
+        st.operatorPin = custom.operatorPin || st.operatorPin || "";
         st.mode = (custom.mode || st.mode || "mcd").toLowerCase();
         st.difficulty = custom.difficulty || st.difficulty || "Standard";
         st.scenarioId = custom.scenarioId || st.scenarioId || "";
@@ -1825,7 +1778,7 @@ wss.on("connection", (twilioWs, req) => {
         st.examMode = String(custom.examMode || (st.examMode ? "true" : "false")) === "true";
         st.ts.connectStartMs = st.ts.connectStartMs || Date.now();
 
-        // Ensure scenario exists
+        // Ensure scenario exists for instructions
         if (!st.scenario) {
           st.rotation.seed = stableSeed({ callSid: st.callSid, from: st.from });
           const sc = pickScenario(st.mode, st.difficulty, st.rotation.seed);
@@ -1838,30 +1791,24 @@ wss.on("connection", (twilioWs, req) => {
             st.baitType = sc.baitType || st.baitType || "";
             st.requiredOutcome = sc.requiredOutcome || st.requiredOutcome || "";
             st.rotation.openerIdx = sc.openers?.length ? hexToInt(st.rotation.seed.slice(8, 16)) % sc.openers.length : 0;
-            st.rotation.pressureIdx = sc.pressureLines?.length
-              ? hexToInt(st.rotation.seed.slice(16, 24)) % sc.pressureLines.length
-              : 0;
+            st.rotation.pressureIdx = sc.pressureLines?.length ? hexToInt(st.rotation.seed.slice(16, 24)) % sc.pressureLines.length : 0;
           }
         }
       }
 
-      console.log(JSON.stringify({ event: "TWILIO_STREAM_START", streamSid, callSid, custom }));
+      console.log(JSON.stringify({ event: "TWILIO_STREAM_START", callSid, streamSid, operatorPin: st?.operatorPin || "", mode: st?.mode, difficulty: st?.difficulty, scenarioId: st?.scenarioId }));
 
-      // Connect OpenAI
       if (st) {
         openaiWs = openaiRealtimeConnect(st);
-        bindOpenAIToTwilio(openaiWs);
+        bindOpenAIToTwilio(openaiWs, st);
       }
-
       startSenderLoop();
 
-      // Timebox: always end + score
+      // Timebox end
       if (st) {
         const maxSec = st.examMode ? TUNE.EXAM_MAX_SECONDS : TUNE.PRACTICE_MAX_SECONDS;
         setTimeout(() => {
-          if (CALL_STATE.has(st.callSid)) {
-            endAndScore(st.examMode ? "EXAM_TIMEBOX" : "PRACTICE_TIMEBOX");
-          }
+          if (CALL_STATE.has(st.callSid)) endAndScore(st.examMode ? "EXAM_TIMEBOX" : "PRACTICE_TIMEBOX");
         }, maxSec * 1000);
       }
 
@@ -1875,71 +1822,67 @@ wss.on("connection", (twilioWs, req) => {
       const st = callSid ? getOrInitState(callSid) : null;
       if (!st || !openaiWs) return;
 
-      // Barge-in: if model has been speaking recently and caller audio arrives, cancel + clear
+      // If borrower was speaking and caller barges in, cancel + clear
       const now = Date.now();
       const modelSpeaking = now - lastModelAudioMs < 550;
 
       if (modelSpeaking) {
         epoch += 1;
         clearTwilioPlayback();
-        cancelResponse(openaiWs);
+        cancelResponse(openaiWs); // guarded
       }
 
-      // inbound size sanity
+      // Forward caller audio (drives model + transcription)
       const bytes = Buffer.byteLength(payload, "utf8");
       if (bytes > TUNE.INBOUND_MAX_B64_BYTES) {
         st.metrics.staticIndicators.push({ ts: Date.now(), type: "INBOUND_TOO_LARGE", bytes });
         return;
       }
-
-      // Forward caller audio for BOTH:
-      // - model turn-taking
-      // - input_audio_transcription
       trySend(openaiWs, { type: "input_audio_buffer.append", audio: payload });
 
       return;
     }
 
     if (msg.event === "stop") {
-      console.log(JSON.stringify({ event: "TWILIO_STREAM_STOP", callSid, streamSid }));
       endAndScore("TWILIO_STOP");
       return;
     }
   });
 
   twilioWs.on("close", () => {
-    console.log(JSON.stringify({ event: "TWILIO_WS_CLOSE", callSid, streamSid }));
     if (sendTimer) clearInterval(sendTimer);
   });
 
-  twilioWs.on("error", (e) => {
-    console.log(JSON.stringify({ event: "TWILIO_WS_ERROR", callSid, error: String(e?.message || e) }));
+  twilioWs.on("error", () => {
     if (sendTimer) clearInterval(sendTimer);
   });
 });
 
 // =========================================================
-// NOTE: Next block = Post-call operator menu loop + feedback capture,
-// plus scenario retry / reroll logic and audit thresholds + boot.
+// NOTE: Next block = Post-call menu + feedback + retry/new scenario + boot/validity.
 // =========================================================
 // PASTE BLOCK 5 of 6
 // =========================================================
-// Post-Call Operator Menu Loop + Feedback Capture + Scenario Retry/Reroll
+// Post-Call Operator Menu + Feedback + Retry/New Scenario
+// - Always reachable because stream end triggers Twilio redirect to /score (Block 4)
 // =========================================================
 
-// ---------------- Scenario Retry / Reroll ----------------
+// ---------------- Scenario retry/reroll ----------------
 function resetForRetrySameScenario(state) {
-  state.transcript.modelText = [];
   state.transcript.callerText = [];
+  state.transcript.modelText = [];
   state.governance.driftTriggered = false;
   state.governance.driftEvents = [];
   state.governance.violations = [];
   state.governance.checkpoints = [];
+  state.governance.realism = { challengeCount: 0, ladderStep: 0, pressureUsed: false };
+
   state.ts.connectStartMs = 0;
   state.ts.playbackStartMs = 0;
   state.ts.endMs = 0;
 
-  state.metrics.underflowTicks = 0;
+  state.metrics.idleTicks = 0;
+  state.metrics.trueUnderflow = 0;
   state.metrics.sentFrames = 0;
   state.metrics.maxOutQueueBytes = 0;
   state.metrics.avgOutQueueBytes = 0;
@@ -1957,39 +1900,30 @@ function resetForRetrySameScenario(state) {
 }
 
 function rerollScenarioSameModuleDifficulty(state) {
-  const mode = state.mode;
-  const difficulty = state.difficulty;
-  const list = listScenarios(mode, difficulty);
+  const list = listScenarios(state.mode, state.difficulty);
   if (!list.length) return null;
 
   state.operator._rerollCount = (state.operator._rerollCount || 0) + 1;
 
   const seed = String(state.rotation?.seed || stableSeed({ callSid: state.callSid, from: state.from }));
-  const nextSeed = crypto
-    .createHash("sha256")
-    .update(`${seed}::reroll::${state.operator._rerollCount}`)
-    .digest("hex");
-
+  const nextSeed = crypto.createHash("sha256").update(`${seed}::reroll::${state.operator._rerollCount}`).digest("hex");
   state.rotation.seed = nextSeed;
 
-  const scenario = pickScenario(mode, difficulty, nextSeed);
+  const scenario = pickScenario(state.mode, state.difficulty, nextSeed);
   if (!scenario) return null;
 
   state.scenario = scenario;
   state.scenarioId = scenario.id;
-  state.borrowerName = scenario.borrowerName || state.borrowerName || "Steve";
-  state.borrowerGender = String(scenario.borrowerGender || state.borrowerGender || "").toLowerCase();
+
+  state.borrowerName = scenario.borrowerName || "Steve";
+  state.borrowerGender = String(scenario.borrowerGender || "").toLowerCase();
 
   state.ruleFocus = scenario.ruleFocus || [];
   state.baitType = scenario.baitType || "";
   state.requiredOutcome = scenario.requiredOutcome || "";
 
-  state.rotation.openerIdx = scenario.openers?.length
-    ? hexToInt(state.rotation.seed.slice(8, 16)) % scenario.openers.length
-    : 0;
-  state.rotation.pressureIdx = scenario.pressureLines?.length
-    ? hexToInt(state.rotation.seed.slice(16, 24)) % scenario.pressureLines.length
-    : 0;
+  state.rotation.openerIdx = scenario.openers?.length ? hexToInt(state.rotation.seed.slice(8, 16)) % scenario.openers.length : 0;
+  state.rotation.pressureIdx = scenario.pressureLines?.length ? hexToInt(state.rotation.seed.slice(16, 24)) % scenario.pressureLines.length : 0;
 
   resetForRetrySameScenario(state);
   return scenario;
@@ -2003,7 +1937,6 @@ app.post("/post-call", (req, res) => {
   if (!st.operator.lastScore) computeScorecard(st);
 
   const action = absUrl(req, "/post-call-action");
-
   const inner = [
     say("Operator menu."),
     say("Press 1 to replay the scorecard."),
@@ -2015,7 +1948,7 @@ app.post("/post-call", (req, res) => {
     `<Gather input="dtmf" numDigits="1" action="${xmlEscape(action)}" method="POST" timeout="8">`,
     say("Make your selection now."),
     `</Gather>`,
-    say("No input received. Returning to the main menu."),
+    say("No input received. Returning to main menu."),
     `<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`,
   ].join("");
 
@@ -2029,65 +1962,52 @@ app.post("/post-call-action", (req, res) => {
 
   if (digit === "1") {
     const spoken = st.operator.lastScoreSpoken || spokenScorecard(st.operator.lastScore || computeScorecard(st));
-    return res
-      .type("text/xml")
-      .status(200)
-      .send(
-        twimlResponse(
-          `${say("Replaying scorecard.")}${say(spoken)}<Redirect method="POST">${xmlEscape(
-            absUrl(req, "/post-call")
-          )}</Redirect>`
-        )
-      );
+    return res.type("text/xml").status(200).send(
+      twimlResponse(`${say("Replaying scorecard.")}${say(spoken)}<Redirect method="POST">${xmlEscape(absUrl(req, "/post-call"))}</Redirect>`)
+    );
   }
 
   if (digit === "2") {
     resetForRetrySameScenario(st);
-    return res
-      .type("text/xml")
-      .status(200)
-      .send(twimlResponse(`${say("Retrying the same scenario.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/connect-prompt"))}</Redirect>`));
+    return res.type("text/xml").status(200).send(
+      twimlResponse(`${say("Retrying the same scenario.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/connect-prompt"))}</Redirect>`)
+    );
   }
 
   if (digit === "3") {
     const sc = rerollScenarioSameModuleDifficulty(st);
     if (!sc) {
-      return res
-        .type("text/xml")
-        .status(200)
-        .send(twimlResponse(`${say("No additional scenarios available.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/post-call"))}</Redirect>`));
+      return res.type("text/xml").status(200).send(
+        twimlResponse(`${say("No additional scenarios available.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/post-call"))}</Redirect>`)
+      );
     }
-    return res
-      .type("text/xml")
-      .status(200)
-      .send(twimlResponse(`${say("New scenario loaded.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/connect-prompt"))}</Redirect>`));
+    return res.type("text/xml").status(200).send(
+      twimlResponse(`${say("New scenario loaded.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/connect-prompt"))}</Redirect>`)
+    );
   }
 
   if (digit === "4") {
-    return res
-      .type("text/xml")
-      .status(200)
-      .send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/feedback-prompt"))}</Redirect>`));
+    return res.type("text/xml").status(200).send(
+      twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/feedback-prompt"))}</Redirect>`)
+    );
   }
 
   if (digit === "5") {
-    return res
-      .type("text/xml")
-      .status(200)
-      .send(twimlResponse(`${say("Returning to main menu.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`));
+    return res.type("text/xml").status(200).send(
+      twimlResponse(`${say("Returning to main menu.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`)
+    );
   }
 
   if (digit === "6") {
     return res.type("text/xml").status(200).send(twimlResponse(`${say("Goodbye.")}<Hangup/>`));
   }
 
-  return res
-    .type("text/xml")
-    .status(200)
-    .send(twimlResponse(`${say("Invalid selection.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/post-call"))}</Redirect>`));
+  return res.type("text/xml").status(200).send(
+    twimlResponse(`${say("Invalid selection.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/post-call"))}</Redirect>`)
+  );
 });
 
-// ---------------- Feedback: 1–5 rating + optional voice note ----------------
+// ---------------- Feedback: rating + optional voice note ----------------
 app.post("/feedback-prompt", (req, res) => {
   const action = absUrl(req, "/feedback-rating");
   const inner = [
@@ -2109,10 +2029,9 @@ app.post("/feedback-rating", (req, res) => {
 
   const rating = parseInt(digit, 10);
   if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
-    return res
-      .type("text/xml")
-      .status(200)
-      .send(twimlResponse(`${say("Invalid rating.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/feedback-prompt"))}</Redirect>`));
+    return res.type("text/xml").status(200).send(
+      twimlResponse(`${say("Invalid rating.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/feedback-prompt"))}</Redirect>`)
+    );
   }
 
   st.operator.feedback = st.operator.feedback || {};
@@ -2142,16 +2061,15 @@ app.post("/feedback-note", (req, res) => {
   st.operator.feedback.noteRecordingDuration = recDur || null;
   st.operator.feedback.noteAtMs = Date.now();
 
-  console.log(JSON.stringify({ event: "FEEDBACK_CAPTURED", callSid: sid, rating: st.operator.feedback.rating, recordingUrl: recUrl || null, recordingDuration: recDur || null }));
+  console.log(JSON.stringify({ event: "FEEDBACK_CAPTURED", callSid: sid, operatorPin: st.operatorPin, rating: st.operator.feedback.rating, recordingUrl: recUrl || null }));
 
-  return res
-    .type("text/xml")
-    .status(200)
-    .send(twimlResponse(`${say("Thank you. Feedback saved.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/post-call"))}</Redirect>`));
+  return res.type("text/xml").status(200).send(
+    twimlResponse(`${say("Thank you. Feedback saved.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/post-call"))}</Redirect>`)
+  );
 });
 
 // =========================================================
-// NOTE: Next block = technical validity thresholds, audit flush on shutdown, boot + listen.
+// NOTE: Next block = Technical validity thresholds + audit flush + boot/listen.
 // =========================================================
 // PASTE BLOCK 6 of 6
 // =========================================================
@@ -2160,44 +2078,34 @@ app.post("/feedback-note", (req, res) => {
 
 // ---------------- Observability thresholds ----------------
 const OBS = {
-  MAX_UNDERFLOW_TICKS_EXAM: clampInt(process.env.MAX_UNDERFLOW_TICKS_EXAM, 120, 0, 999999),
-  MAX_UNDERFLOW_TICKS_PRACTICE: clampInt(process.env.MAX_UNDERFLOW_TICKS_PRACTICE, 240, 0, 999999),
-  MAX_PLAYBACK_START_LATENCY_MS: clampInt(process.env.MAX_PLAYBACK_START_LATENCY_MS, 6000, 0, 60000),
+  MAX_TRUE_UNDERFLOW_EXAM: clampInt(process.env.MAX_TRUE_UNDERFLOW_EXAM, 40, 0, 999999),
+  MAX_TRUE_UNDERFLOW_PRACTICE: clampInt(process.env.MAX_TRUE_UNDERFLOW_PRACTICE, 80, 0, 999999),
   MIN_SENT_FRAMES_EXAM: clampInt(process.env.MIN_SENT_FRAMES_EXAM, 10, 0, 999999),
+  REQUIRE_TRANSCRIPTION_EVENTS: clampInt(process.env.REQUIRE_TRANSCRIPTION_EVENTS, 1, 0, 999999),
 };
 
 function technicalValidity(state) {
   if (!state) return { valid: true, reasons: [] };
 
   const reasons = [];
-  const under = state.metrics?.underflowTicks || 0;
+  const tu = state.metrics?.trueUnderflow || 0;
   const sent = state.metrics?.sentFrames || 0;
 
-  const playbackStartMs = state.ts?.playbackStartMs || 0;
-  const connectStartMs = state.ts?.connectStartMs || 0;
-
-  const playbackLatency =
-    playbackStartMs && connectStartMs ? playbackStartMs - connectStartMs : null;
-
-  const maxUnder = state.examMode ? OBS.MAX_UNDERFLOW_TICKS_EXAM : OBS.MAX_UNDERFLOW_TICKS_PRACTICE;
-  if (under > maxUnder) reasons.push(`UNDERFLOW_TICKS_EXCEEDED:${under}`);
+  const maxTU = state.examMode ? OBS.MAX_TRUE_UNDERFLOW_EXAM : OBS.MAX_TRUE_UNDERFLOW_PRACTICE;
+  if (tu > maxTU) reasons.push(`TRUE_UNDERFLOW_EXCEEDED:${tu}`);
 
   if (state.examMode && sent < OBS.MIN_SENT_FRAMES_EXAM) reasons.push(`LOW_SENT_FRAMES:${sent}`);
 
-  if (playbackLatency !== null && playbackLatency > OBS.MAX_PLAYBACK_START_LATENCY_MS) {
-    reasons.push(`PLAYBACK_START_LATENCY_MS:${playbackLatency}`);
-  }
-
-  // transcription health: if zero transcription events in a connected call, scoring may be weak
+  // If connected call but no transcription events, scoring cannot be trusted
   if ((state.operator?.connectMode || "connect") === "connect") {
     const te = state.metrics?.transcriptionEvents || 0;
-    if (te === 0) reasons.push("NO_TRANSCRIPTION_EVENTS");
+    if (te < OBS.REQUIRE_TRANSCRIPTION_EVENTS) reasons.push(`NO_TRANSCRIPTION_EVENTS:${te}`);
   }
 
-  return { valid: reasons.length === 0, reasons, playbackLatencyMs: playbackLatency };
+  return { valid: reasons.length === 0, reasons };
 }
 
-// Wrap finalizeAuditRecord to include technical validity and to prevent PASS on invalid exam evidence
+// Wrap finalizeAuditRecord to include validity and prevent PASS on invalid evidence
 const _finalizeAuditRecord = finalizeAuditRecord;
 finalizeAuditRecord = function finalizeAuditRecordWrapped(state, extra = {}) {
   if (!state) return false;
@@ -2218,7 +2126,7 @@ finalizeAuditRecord = function finalizeAuditRecordWrapped(state, extra = {}) {
   return _finalizeAuditRecord(state, { ...extra, technicalValidity: tv });
 };
 
-// ---------------- Flush audits for all active calls ----------------
+// ---------------- Flush audits on shutdown ----------------
 function flushAllAudits(reason) {
   try {
     for (const [, st] of CALL_STATE.entries()) {
@@ -2265,6 +2173,11 @@ function boot() {
     loadScenariosOrThrow();
   } catch (e) {
     console.log(JSON.stringify({ event: "SCENARIOS_FATAL", error: String(e?.message || e) }));
+  }
+
+  // Twilio redirect requires credentials; warn if missing
+  if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) {
+    console.log(JSON.stringify({ event: "TWILIO_CREDS_WARNING", note: "Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN to guarantee post-call score/menu." }));
   }
 
   server.listen(PORT, HOST, () => {
