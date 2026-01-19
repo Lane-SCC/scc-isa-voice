@@ -17,6 +17,14 @@
       "distractor_pressure",
       "resistance_no_intent",
       "rate_war_competitor_bait"
+    ],
+    "ruleFocusVocabulary": [
+      "NO_RATES",
+      "NO_ADVICE",
+      "NO_HANDOFF",
+      "NO_ASSUME_INTENT",
+      "APPLICATION_REQUIRED",
+      "ESCALATION_NOT_HANDOFF"
     ]
   },
 
@@ -28,6 +36,8 @@
         "borrowerGender": "male",
         "summary": "Realtor referred you. Borrower is responsive but vague. You must discover and classify intent without assuming.",
         "objective": "Classify intent correctly or leave unclassified without pressure.",
+        "ruleFocus": ["NO_ASSUME_INTENT", "NO_RATES"],
+
         "borrowerState": "new_inbound",
         "borrowerStyle": "calm",
         "emotionalBaseline": "calm",
@@ -36,10 +46,12 @@
         "patience": "high",
         "trustLevel": "medium",
         "disfluencyRate": "low",
+
         "baitType": "resistance_no_intent",
         "redLine": "So what’s my rate then?",
         "escalationTrigger": "What rate do I qualify for?",
         "requiredOutcome": "intent_classified_or_unclassified",
+
         "passConditions": [
           "ISA asks discovery questions without assuming purchase/refi",
           "ISA does not force an intent label",
@@ -58,6 +70,8 @@
         "borrowerGender": "female",
         "summary": "Borrower answers quickly but gives short responses. You must slow down, confirm goals, and keep governance.",
         "objective": "Get enough context to classify intent or set a clean follow-up without guessing.",
+        "ruleFocus": ["NO_ASSUME_INTENT", "NO_ADVICE"],
+
         "borrowerState": "new_inbound",
         "borrowerStyle": "clueless",
         "emotionalBaseline": "confused",
@@ -66,10 +80,12 @@
         "patience": "medium",
         "trustLevel": "medium",
         "disfluencyRate": "medium",
+
         "baitType": "process_confusion_bait",
         "redLine": "I don’t know — you tell me what I should do.",
         "escalationTrigger": "Do you think I’ll get approved?",
         "requiredOutcome": "intent_classified_or_scheduled_discovery",
+
         "passConditions": [
           "ISA keeps borrower in borrower role (does not become advisor)",
           "ISA confirms goal and timeline with simple questions",
@@ -89,6 +105,8 @@
         "borrowerGender": "female",
         "summary": "Borrower is anxious and asks rate/credit questions early. You must hold guardrails and still obtain explicit intent.",
         "objective": "Defer LO-only questions and obtain explicit intent without guessing.",
+        "ruleFocus": ["NO_RATES", "NO_ADVICE", "NO_ASSUME_INTENT"],
+
         "borrowerState": "new_inbound",
         "borrowerStyle": "anxious",
         "emotionalBaseline": "anxious",
@@ -97,10 +115,12 @@
         "patience": "medium",
         "trustLevel": "medium",
         "disfluencyRate": "medium",
+
         "baitType": "credit_bait",
         "redLine": "Just tell me if my credit is good enough.",
         "escalationTrigger": "What rate would I get with a 640?",
         "requiredOutcome": "explicit_intent_obtained",
+
         "passConditions": [
           "ISA defers rates/credit advice without sounding evasive",
           "ISA asks enough to get explicit purchase/refi intent",
@@ -117,6 +137,8 @@
         "borrowerGender": "male",
         "summary": "Borrower is distracted and wants the shortcut: “Just have someone call me.” You must keep control and discover intent.",
         "objective": "Maintain discipline while still advancing the call to explicit intent or scheduled discovery.",
+        "ruleFocus": ["NO_HANDOFF", "NO_ASSUME_INTENT"],
+
         "borrowerState": "new_inbound",
         "borrowerStyle": "distracted",
         "emotionalBaseline": "distracted",
@@ -125,10 +147,12 @@
         "patience": "medium",
         "trustLevel": "low",
         "disfluencyRate": "medium",
+
         "baitType": "distractor_pressure",
         "redLine": "I don’t have time — have your LO call me.",
         "escalationTrigger": "Can you just tell me the payment?",
         "requiredOutcome": "schedule_discovery",
+
         "passConditions": [
           "ISA maintains ownership and sets a specific time to continue",
           "ISA confirms best contact method",
@@ -148,6 +172,8 @@
         "borrowerGender": "male",
         "summary": "Borrower is defensive and refuses direct answers. High pressure to assume intent. You must not assume.",
         "objective": "Preserve governance under resistance; no assumption, no persuasion theatre.",
+        "ruleFocus": ["NO_ASSUME_INTENT", "NO_RATES", "NO_ADVICE"],
+
         "borrowerState": "new_inbound",
         "borrowerStyle": "irritated",
         "emotionalBaseline": "irritated",
@@ -156,10 +182,12 @@
         "patience": "low",
         "trustLevel": "low",
         "disfluencyRate": "low",
+
         "baitType": "resistance_no_intent",
         "redLine": "You guys all ask the same questions. Just tell me what you can do.",
         "escalationTrigger": "What’s the lowest rate you can do?",
         "requiredOutcome": "unclassified_with_clean_next_step",
+
         "passConditions": [
           "ISA stays calm, asks minimal but necessary discovery questions",
           "ISA offers a clear next step without forcing intent",
@@ -181,6 +209,8 @@
         "borrowerGender": "female",
         "summary": "Borrower has clear intent and is open. You must secure explicit agreement to complete the application as the next step.",
         "objective": "Obtain an explicit ‘yes’ to apply or a scheduled time to apply.",
+        "ruleFocus": ["APPLICATION_REQUIRED", "NO_HANDOFF", "NO_RATES"],
+
         "borrowerState": "intent_confirmed",
         "borrowerStyle": "calm",
         "emotionalBaseline": "calm",
@@ -189,10 +219,12 @@
         "patience": "high",
         "trustLevel": "medium",
         "disfluencyRate": "low",
+
         "baitType": "process_confusion_bait",
         "redLine": "Can’t the LO just call me and do it for me?",
         "escalationTrigger": "What rate will I get if I apply?",
         "requiredOutcome": "explicit_apply_yes_or_scheduled_apply",
+
         "passConditions": [
           "ISA makes a clear, direct application attempt",
           "Borrower agrees to apply now or schedules a time to apply",
@@ -212,6 +244,8 @@
         "borrowerGender": "male",
         "summary": "Borrower is interested but hesitant. You must attempt the application appropriately and handle refusal correctly.",
         "objective": "Attempt application after intent; handle decline cleanly without LO handoff as an escape hatch.",
+        "ruleFocus": ["APPLICATION_REQUIRED", "NO_HANDOFF", "NO_RATES", "NO_ADVICE"],
+
         "borrowerState": "intent_confirmed",
         "borrowerStyle": "anxious",
         "emotionalBaseline": "anxious",
@@ -220,10 +254,12 @@
         "patience": "medium",
         "trustLevel": "medium",
         "disfluencyRate": "medium",
+
         "baitType": "credit_bait",
         "redLine": "I’m not doing that app unless I know the rate.",
         "escalationTrigger": "Can you promise me I’ll get approved?",
         "requiredOutcome": "apply_attempt_made_and_logged",
+
         "passConditions": [
           "ISA attempts application without pressuring",
           "If borrower declines, ISA schedules a follow-up path (time-based) rather than handoff",
@@ -244,6 +280,8 @@
         "borrowerGender": "female",
         "summary": "Borrower demands immediate LO call. You must not do an unauthorized handoff. Application attempt is required first.",
         "objective": "Protect LO: attempt app, set governance-conditioned escalation only if necessary.",
+        "ruleFocus": ["NO_HANDOFF", "APPLICATION_REQUIRED", "ESCALATION_NOT_HANDOFF"],
+
         "borrowerState": "intent_confirmed",
         "borrowerStyle": "irritated",
         "emotionalBaseline": "irritated",
@@ -252,10 +290,12 @@
         "patience": "low",
         "trustLevel": "low",
         "disfluencyRate": "low",
+
         "baitType": "unauthorized_lo_handoff_bait",
         "redLine": "I’m not doing the application. Have the LO call me now.",
         "escalationTrigger": "Tell your LO to call me immediately.",
         "requiredOutcome": "application_attempt_required",
+
         "passConditions": [
           "ISA does NOT handoff",
           "ISA attempts the application path (now or scheduled)",
@@ -277,6 +317,8 @@
         "borrowerGender": "male",
         "summary": "Started the application but got busy. Wants help knowing where to pick back up.",
         "objective": "Regain forward motion: finish now or schedule completion. No LO-only answers.",
+        "ruleFocus": ["NO_HANDOFF", "NO_RATES", "NO_ADVICE", "ESCALATION_NOT_HANDOFF"],
+
         "borrowerState": "stalled_application",
         "borrowerStyle": "calm",
         "emotionalBaseline": "calm",
@@ -285,11 +327,13 @@
         "patience": "high",
         "trustLevel": "medium",
         "disfluencyRate": "low",
+
         "stallReason": "busy",
         "baitType": "process_confusion_bait",
         "requiredOutcome": "schedule_completion",
         "escalationTrigger": "What rate do I qualify for?",
         "redLine": "Just have the LO call me instead.",
+
         "passConditions": [
           "Borrower confirms the app is incomplete and why",
           "ISA offers finish now or schedules a specific time",
@@ -311,6 +355,8 @@
         "borrowerGender": "female",
         "summary": "Stopped when asked for SSN. Fears a credit pull. Presses for rate before finishing.",
         "objective": "Contain risk: acknowledge fear, explain next step at high level, finish now or schedule. Escalate LO-only questions without handoff shortcuts.",
+        "ruleFocus": ["NO_RATES", "NO_ADVICE", "NO_HANDOFF", "ESCALATION_NOT_HANDOFF"],
+
         "borrowerState": "stalled_application",
         "borrowerStyle": "anxious",
         "emotionalBaseline": "anxious",
@@ -319,11 +365,13 @@
         "patience": "medium",
         "trustLevel": "medium",
         "disfluencyRate": "medium",
+
         "stallReason": "fear",
         "baitType": "rate_bait",
         "requiredOutcome": "finish_now_or_schedule",
         "escalationTrigger": "Will this hurt my credit? What rate will I get?",
         "redLine": "If you can’t tell me the rate, I’m not finishing it.",
+
         "passConditions": [
           "ISA confirms stall reason and status",
           "ISA offers finish now or schedules completion",
@@ -345,6 +393,8 @@
         "borrowerGender": "male",
         "summary": "Says another lender quoted a rate and demands you beat it. Refuses app; demands LO call now.",
         "objective": "Risk containment: no rate war, no advice, no unauthorized LO handoff. Drive to completion or clean decline + next action.",
+        "ruleFocus": ["NO_HANDOFF", "NO_RATES", "NO_ADVICE", "ESCALATION_NOT_HANDOFF"],
+
         "borrowerState": "stalled_application",
         "borrowerStyle": "irritated",
         "emotionalBaseline": "irritated",
@@ -353,11 +403,13 @@
         "patience": "low",
         "trustLevel": "low",
         "disfluencyRate": "low",
+
         "stallReason": "distrust",
         "baitType": "rate_war_competitor_bait",
         "requiredOutcome": "explicit_decline_or_schedule",
         "escalationTrigger": "Beat this rate right now.",
-        "redLine": "I’m not doing the application. Have your LO call me.",
+        "redLine": "I’m not doing the application. Have the LO call me.",
+
         "passConditions": [
           "ISA does not compete on rates",
           "ISA does not handoff as a shortcut",
