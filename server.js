@@ -1,20 +1,17 @@
 /* SCC ISA Training Voice System (Governance-First)
- * v2.9 — HARD ROLE LOCK + SERVER-SIDE ROLE DRIFT TRIPWIRE (NO audio regression)
+ * v3.0 — Fix OpenAI loud static by enforcing strict 20ms μ-law frames to Twilio
  *
- * What this adds:
- * - Session-level "ABSOLUTE ROLE LOCK" to stop borrower acting like lender/operator.
- * - Tripwire: detects role drift in streamed text/transcript and performs:
- *   1) response.cancel
- *   2) session.update ROLE RESET
- *   3) response.create re-anchor borrower line
- *   4) Twilio clear (flush buffered audio)
+ * Root fix:
+ * - Twilio Media Streams playback is extremely sensitive to frame sizing.
+ * - We now send ONLY exact 160-byte (20ms @ 8kHz μ-law) frames.
+ * - We do NOT send partial frames. We buffer until we have a full frame.
  *
- * Keeps unchanged:
- * - VAD-driven timing
- * - response.cancel + Twilio clear barge-in
- * - micro-jitter μ-law batching
+ * Keeps:
+ * - Hard borrower role lock (session.update)
+ * - VAD timing
+ * - Barge-in (response.cancel + Twilio clear)
  * - CONNECTING guard (buffer Twilio audio until OpenAI WS open)
- * - Render port binding
+ * - M1/MCD flow
  */
 
 const fs = require("fs");
@@ -125,7 +122,6 @@ function clampInt(n, min, max) {
 const NARRATOR_VOICE = "Google.en-US-Chirp3-HD-Aoede";
 
 function say(text) {
-  // force acronym pronunciation in narrator (also catches scenario text)
   const cleaned = String(text).replace(/\bISA\b/g, "I. S. A.");
   return `<Say voice="${NARRATOR_VOICE}">${xmlEscape(cleaned)}</Say>`;
 }
@@ -206,7 +202,6 @@ function resolveBorrowerMeta({ scenario, style, rng }) {
   return meta;
 }
 
-// -------------------- Hard borrower instructions (session-level) --------------------
 function buildHardBorrowerSessionInstructions(borrowerName, meta) {
   return `
 ABSOLUTE ROLE LOCK — NON-NEGOTIABLE
@@ -244,27 +239,10 @@ Violation of this role is a FAILURE CONDITION.
 `.trim();
 }
 
-// =========================================================
-// ROLE DRIFT TRIPWIRE (server-side)
-// =========================================================
-
-const DRIFT_PATTERNS = [
-  /\b(i can|i will|i recommend|you should|based on|current market|qualify|approval|offer you)\b/i,
-  /\b(rate|rates|apr|interest rate|payment|points|lock|pricing)\b/i,
-  /\b(shipping|import|italy|luxury car|ferrari|lamborghini)\b/i,
-  /\b(gout|diagnosis|symptoms|medical|doctor)\b/i,
-  /\b(your income|your credit|your borrower profile|you are buying|you should finance)\b/i,
-  /\b(we can|get you approved|our program|our lender|our underwriting)\b/i
-];
-
-function hasRoleDrift(text) {
-  return DRIFT_PATTERNS.some((rx) => rx.test(text));
-}
-
 // -------------------- Health --------------------
 app.get("/", (_, res) => res.status(200).send("OK"));
 app.get("/version", (_, res) =>
-  res.status(200).send("scc-isa-voice v2.9 role-lock + tripwire")
+  res.status(200).send("scc-isa-voice v3.0 strict-frames-no-static")
 );
 
 // =========================================================
@@ -299,25 +277,16 @@ app.post("/menu", (req, res) => {
   const digit = (req.body.Digits || "").trim();
   console.log(JSON.stringify({ event: "MENU", sid, digit }));
 
-  if (digit === "1") {
-    const gatePrompt = absUrl(req, "/m1-gate-prompt");
-    return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${gatePrompt}</Redirect>`));
-  }
-  if (digit === "2") {
-    const gatePrompt = absUrl(req, "/mcd-gate-prompt");
-    return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${gatePrompt}</Redirect>`));
-  }
+  if (digit === "1") return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${absUrl(req, "/m1-gate-prompt")}</Redirect>`));
+  if (digit === "2") return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${absUrl(req, "/mcd-gate-prompt")}</Redirect>`));
 
-  const back = absUrl(req, "/voice");
   return res.type("text/xml").status(200).send(
-    twimlResponse(`${say("Invalid selection. Returning to main menu.")}<Redirect method="POST">${back}</Redirect>`)
+    twimlResponse(`${say("Invalid selection. Returning to main menu.")}<Redirect method="POST">${absUrl(req, "/voice")}</Redirect>`)
   );
 });
 
-// ---------- Gates ----------
+// Gates
 app.post("/mcd-gate-prompt", (req, res) => {
-  const sid = req.body.CallSid;
-  console.log(JSON.stringify({ event: "MCD_GATE_PROMPT", sid }));
   const action = absUrl(req, "/mcd-gate");
   const inner = gatherOneDigit({
     action,
@@ -328,23 +297,12 @@ app.post("/mcd-gate-prompt", (req, res) => {
 });
 
 app.post("/mcd-gate", (req, res) => {
-  const sid = req.body.CallSid;
-  const digit = (req.body.Digits || "").trim();
-  const pass = digit === "9";
-  console.log(JSON.stringify({ event: "MCD_GATE", sid, pass }));
-
-  if (!pass) {
-    const back = absUrl(req, "/mcd-gate-prompt");
-    return res.type("text/xml").status(200).send(twimlResponse(`${say("Gate not confirmed.")}<Redirect method="POST">${back}</Redirect>`));
-  }
-
-  const diffPrompt = absUrl(req, "/difficulty-prompt?mode=mcd");
-  return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${diffPrompt}</Redirect>`));
+  const pass = (req.body.Digits || "").trim() === "9";
+  if (!pass) return res.type("text/xml").status(200).send(twimlResponse(`${say("Gate not confirmed.")}<Redirect method="POST">${absUrl(req, "/mcd-gate-prompt")}</Redirect>`));
+  return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${absUrl(req, "/difficulty-prompt?mode=mcd")}</Redirect>`));
 });
 
 app.post("/m1-gate-prompt", (req, res) => {
-  const sid = req.body.CallSid;
-  console.log(JSON.stringify({ event: "M1_GATE_PROMPT", sid }));
   const action = absUrl(req, "/m1-gate");
   const inner = gatherOneDigit({
     action,
@@ -355,33 +313,20 @@ app.post("/m1-gate-prompt", (req, res) => {
 });
 
 app.post("/m1-gate", (req, res) => {
-  const sid = req.body.CallSid;
-  const digit = (req.body.Digits || "").trim();
-  const pass = digit === "8";
-  console.log(JSON.stringify({ event: "M1_GATE", sid, pass }));
-
-  if (!pass) {
-    const back = absUrl(req, "/m1-gate-prompt");
-    return res.type("text/xml").status(200).send(twimlResponse(`${say("Gate not confirmed.")}<Redirect method="POST">${back}</Redirect>`));
-  }
-
-  const diffPrompt = absUrl(req, "/difficulty-prompt?mode=m1");
-  return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${diffPrompt}</Redirect>`));
+  const pass = (req.body.Digits || "").trim() === "8";
+  if (!pass) return res.type("text/xml").status(200).send(twimlResponse(`${say("Gate not confirmed.")}<Redirect method="POST">${absUrl(req, "/m1-gate-prompt")}</Redirect>`));
+  return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${absUrl(req, "/difficulty-prompt?mode=m1")}</Redirect>`));
 });
 
-// ---------- Difficulty ----------
+// Difficulty
 app.post("/difficulty-prompt", (req, res) => {
-  const sid = req.body.CallSid;
   const mode = (req.query.mode || "").trim();
-  console.log(JSON.stringify({ event: "DIFFICULTY_PROMPT", sid, mode }));
-
   const action = absUrl(req, `/difficulty?mode=${encodeURIComponent(mode)}`);
   const inner = gatherOneDigit({
     action,
     promptText: "Select difficulty. Press 1 for Standard. Press 2 for Moderate. Press 3 for Edge.",
     invalidText: "Invalid selection. Press 1, 2, or 3."
   });
-
   res.type("text/xml").status(200).send(twimlResponse(inner));
 });
 
@@ -401,10 +346,7 @@ app.post("/difficulty", (req, res) => {
   }
 
   const scenario = pickScenario(mode, difficulty);
-  if (!scenario) {
-    const back = absUrl(req, "/voice");
-    return res.type("text/xml").status(200).send(twimlResponse(`${say("No scenarios available. Returning to main menu.")}<Redirect method="POST">${back}</Redirect>`));
-  }
+  if (!scenario) return res.type("text/xml").status(200).send(twimlResponse(`${say("No scenarios available.")}<Redirect method="POST">${absUrl(req, "/voice")}</Redirect>`));
 
   const { style, rng } = chooseStyleForCall({ callSid: sid, scenario, difficulty });
   const borrowerMeta = resolveBorrowerMeta({ scenario, style, rng });
@@ -426,7 +368,6 @@ app.post("/difficulty", (req, res) => {
   const safeSummary = String(scenario.summary || "");
   const safeObjective = String(scenario.objective || "");
 
-  // IMPORTANT: nothing after <Connect><Stream>
   const inner = `
     ${say(`Scenario. ${safeSummary}`)}
     ${say(`Primary objective. ${safeObjective}`)}
@@ -440,7 +381,6 @@ app.post("/difficulty", (req, res) => {
 
         <Parameter name="borrowerName" value="${xmlEscape(scenario.borrowerName)}" />
         <Parameter name="borrowerGender" value="${xmlEscape(scenario.borrowerGender)}" />
-        <Parameter name="objective" value="${xmlEscape(safeObjective)}" />
 
         <Parameter name="style" value="${xmlEscape(borrowerMeta.style)}" />
         <Parameter name="emotion" value="${xmlEscape(borrowerMeta.emotion)}" />
@@ -462,11 +402,11 @@ app.post("/difficulty", (req, res) => {
 // WebSocket Bridge: Twilio Media Streams <-> OpenAI Realtime
 // =========================================================
 
-// μ-law batching to reduce choppy/robot gaps
-const FRAME_BYTES = 320; // 40ms
-const SEND_TICK_MS = 20; // schedule cadence
+// ✅ STRICT 20ms μ-law frames for Twilio playback:
+const FRAME_BYTES = 160;  // 20ms @ 8kHz μ-law
+const SEND_TICK_MS = 20;  // 20ms cadence
 
-function openaiRealtimeConnect({ borrowerName, mode, difficulty, scenarioId, objective, meta }) {
+function openaiRealtimeConnect({ borrowerName, meta }) {
   const apiKey = requireEnv("OPENAI_API_KEY");
   const model = process.env.REALTIME_MODEL || "gpt-realtime-mini";
 
@@ -485,15 +425,14 @@ function openaiRealtimeConnect({ borrowerName, mode, difficulty, scenarioId, obj
         ? { type: noiseReductionMode }
         : null;
 
-    // HARD session role lock (primary control)
     ws.send(JSON.stringify({
       type: "session.update",
       session: {
-        modalities: ["audio", "text"], // text enabled for tripwire only (doesn't change audio feel)
+        modalities: ["audio"],
         voice: "marin",
+        temperature: 0.2,
         input_audio_format: "g711_ulaw",
         output_audio_format: "g711_ulaw",
-        temperature: 0.2,
         input_audio_noise_reduction: inputAudioNoiseReduction,
         turn_detection: {
           type: "server_vad",
@@ -508,12 +447,11 @@ function openaiRealtimeConnect({ borrowerName, mode, difficulty, scenarioId, obj
       }
     }));
 
-    // Borrower speaks first (tight leash, preserves feel)
     ws.send(JSON.stringify({
       type: "response.create",
       response: {
-        modalities: ["audio", "text"],
-        instructions: `You are the borrower only. Start the call with: "Hello, this is ${borrowerName}." Then wait.`
+        modalities: ["audio"],
+        instructions: `You are the borrower only. Start with: "Hello, this is ${borrowerName}." Then wait.`
       }
     }));
   });
@@ -521,7 +459,6 @@ function openaiRealtimeConnect({ borrowerName, mode, difficulty, scenarioId, obj
   return ws;
 }
 
-// --- Server & WS upgrade ---
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
@@ -538,7 +475,7 @@ wss.on("connection", (twilioWs) => {
   let streamSid = null;
   let openaiWs = null;
 
-  // Audio output batching
+  // Output audio queue
   let outQueue = [];
   let outQueueBytes = 0;
   let sendTimer = null;
@@ -546,25 +483,9 @@ wss.on("connection", (twilioWs) => {
   // Buffer inbound audio until OpenAI is OPEN
   let inboundAudioBuffer = [];
   let inboundAudioBytes = 0;
-  const MAX_INBOUND_BUFFER_BYTES = 160 * 50; // small bounded buffer
+  const MAX_INBOUND_BUFFER_BYTES = 160 * 50;
 
-  // Turn timing
   let pendingResponseTimer = null;
-
-  // Tripwire rolling window
-  let rollingText = "";
-  let lastTripwireAt = 0;
-  const TRIPWIRE_COOLDOWN_MS = 8000;
-  let inTripwireReset = false;
-
-  // Capture borrower name for re-anchor line
-  let currentBorrowerName = "Steve";
-  let currentMeta = {
-    emotion: "calm",
-    talkativeness: "medium",
-    patience: "medium",
-    trust: "medium"
-  };
 
   function log(event, obj = {}) {
     console.log(JSON.stringify({ event, sid: callSid, streamSid, ...obj }));
@@ -635,11 +556,12 @@ wss.on("connection", (twilioWs) => {
     sendTimer = null;
   }
 
+  // ✅ Strict framing sender: only send when we have a full 160B frame
   function startSendTimer() {
     if (sendTimer) return;
     sendTimer = setInterval(() => {
       if (!streamSid) return;
-      if (outQueueBytes <= 0) return;
+      if (outQueueBytes < FRAME_BYTES) return;
 
       let frame = Buffer.alloc(0);
       while (outQueue.length && frame.length < FRAME_BYTES) {
@@ -656,7 +578,10 @@ wss.on("connection", (twilioWs) => {
         }
       }
 
-      if (frame.length === 0) return;
+      if (frame.length !== FRAME_BYTES) {
+        // Shouldn't happen, but never send partials
+        return;
+      }
 
       try {
         twilioWs.send(JSON.stringify({
@@ -680,15 +605,14 @@ wss.on("connection", (twilioWs) => {
 
     pendingResponseTimer = setTimeout(() => {
       pendingResponseTimer = null;
-      const ok = safeOpenAISend({
+      safeOpenAISend({
         type: "response.create",
         response: {
-          modalities: ["audio", "text"],
+          modalities: ["audio"],
           instructions:
-            "Respond as the borrower only. Stay in mortgage context. Do not advise. If asked for rates/eligibility/medical/legal: be uncertain and redirect. Keep it brief."
+            "Respond as the borrower only. Stay in mortgage context. Do not advise. Keep it brief."
         }
       });
-      if (ok) log("OPENAI_RESPONSE_CREATE_SENT", { delayMs: delay });
     }, delay);
   }
 
@@ -709,57 +633,6 @@ wss.on("connection", (twilioWs) => {
     stopSendTimer();
   }
 
-  function maybeAppendTripwireText(delta) {
-    if (!delta) return;
-    rollingText += String(delta);
-    if (rollingText.length > 800) rollingText = rollingText.slice(-800);
-  }
-
-  function runTripwireIfNeeded() {
-    const now = Date.now();
-    if (inTripwireReset) return;
-    if (now - lastTripwireAt < TRIPWIRE_COOLDOWN_MS) return;
-    if (!rollingText) return;
-
-    if (!hasRoleDrift(rollingText)) return;
-
-    lastTripwireAt = now;
-    inTripwireReset = true;
-
-    log("ROLE_DRIFT_TRIPWIRE", { window: rollingText.slice(-250) });
-
-    // 1) Cancel current model response immediately
-    openaiCancelResponse();
-
-    // 2) Clear any partial audio playback
-    twilioClear();
-    flushOutputQueue();
-
-    // 3) Reinforce role immutability (session-level)
-    safeOpenAISend({
-      type: "session.update",
-      session: {
-        instructions: buildHardBorrowerSessionInstructions(currentBorrowerName, currentMeta)
-      }
-    });
-
-    // 4) Re-anchor with borrower-first line
-    safeOpenAISend({
-      type: "response.create",
-      response: {
-        modalities: ["audio", "text"],
-        instructions: `Say exactly: "Hi, this is ${currentBorrowerName}. Sorry — can we get back to the home loan?" Then wait silently.`
-      }
-    });
-
-    rollingText = "";
-
-    // Release reset flag after a moment so we don't loop
-    setTimeout(() => {
-      inTripwireReset = false;
-    }, 1200);
-  }
-
   twilioWs.on("message", (msg) => {
     let data;
     try { data = JSON.parse(msg.toString("utf8")); } catch { return; }
@@ -769,22 +642,10 @@ wss.on("connection", (twilioWs) => {
       streamSid = data.start?.streamSid || null;
       const cp = data.start?.customParameters || {};
 
-      currentBorrowerName = cp.borrowerName || "Steve";
-
-      // Set meta snapshot for tripwire reset instruction
-      currentMeta = {
-        emotion: cp.emotion || "calm",
-        talkativeness: cp.talkativeness || "medium",
-        patience: cp.patience || "medium",
-        trust: cp.trust || "medium"
-      };
-
       log("TWILIO_STREAM_START", { customParameters: cp });
 
       const meta = {
-        style: cp.style || "calm",
         emotion: cp.emotion || "calm",
-        distractor: cp.distractor || "",
         talkativeness: cp.talkativeness || "medium",
         patience: cp.patience || "medium",
         trust: cp.trust || "medium",
@@ -795,11 +656,7 @@ wss.on("connection", (twilioWs) => {
 
       try {
         openaiWs = openaiRealtimeConnect({
-          borrowerName: currentBorrowerName,
-          mode: cp.mode || "mcd",
-          difficulty: cp.difficulty || "Standard",
-          scenarioId: cp.scenarioId || "UNKNOWN",
-          objective: cp.objective || "",
+          borrowerName: cp.borrowerName || "Steve",
           meta
         });
 
@@ -824,7 +681,6 @@ wss.on("connection", (twilioWs) => {
           let evt;
           try { evt = JSON.parse(raw.toString("utf8")); } catch { return; }
 
-          // VAD events
           if (evt.type === "input_audio_buffer.speech_started") {
             onUserBargeIn();
             return;
@@ -834,22 +690,6 @@ wss.on("connection", (twilioWs) => {
             return;
           }
 
-          // Tripwire text sources (be generous)
-          // Different realtime builds may emit different text/transcript event names.
-          if (typeof evt.delta === "string") {
-            if (
-              evt.type === "response.output_text.delta" ||
-              evt.type === "response.text.delta" ||
-              evt.type === "response.audio_transcript.delta" ||
-              evt.type === "output_audio_transcript.delta" ||
-              evt.type === "conversation.item.input_audio_transcription.delta"
-            ) {
-              maybeAppendTripwireText(evt.delta);
-              runTripwireIfNeeded();
-            }
-          }
-
-          // Audio deltas -> Twilio (batching)
           const delta =
             (evt.type === "response.audio.delta" && evt.delta) ? evt.delta :
             (evt.type === "response.output_audio.delta" && evt.delta) ? evt.delta :
@@ -865,7 +705,6 @@ wss.on("connection", (twilioWs) => {
 
           if (evt.type === "error") {
             log("OPENAI_EVT_ERROR", { detail: evt.error || evt });
-            return;
           }
         });
 
@@ -873,7 +712,6 @@ wss.on("connection", (twilioWs) => {
         log("OPENAI_INIT_FAILED", { error: String(err?.message || err) });
         closeBoth();
       }
-
       return;
     }
 
@@ -881,7 +719,6 @@ wss.on("connection", (twilioWs) => {
       const payload = data.media?.payload;
       if (!payload) return;
 
-      // Buffer until OpenAI opens (CONNECTING guard)
       if (!openaiWs || openaiWs.readyState !== 1) {
         bufferInboundAudio(payload);
         return;
