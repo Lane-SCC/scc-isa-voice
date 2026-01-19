@@ -1,59 +1,374 @@
 {
+  "_meta": {
+    "schemaVersion": "1.0",
+    "purpose": "SCC ISA Training Scenarios — Governance-first, auditable, adversarial where needed.",
+    "invariants": [
+      "Borrower never volunteers intent.",
+      "No rates/APR/payment quotes by borrower model.",
+      "LO-only questions must trigger escalation (not handoff).",
+      "M2 is risk containment under pressure, not sales."
+    ],
+    "baitTaxonomy": [
+      "rate_bait",
+      "credit_bait",
+      "underwriting_certainty_bait",
+      "unauthorized_lo_handoff_bait",
+      "process_confusion_bait",
+      "distractor_pressure",
+      "resistance_no_intent",
+      "rate_war_competitor_bait"
+    ]
+  },
+
   "mcd": {
     "Standard": [
       {
-        "id": "MCD-S-03",
+        "id": "MCD-S-01",
         "borrowerName": "Mike",
         "borrowerGender": "male",
-        "summary": "Realtor partner referred you. Borrower is responsive but vague. You must discover and correctly classify intent without assuming.",
-        "objective": "ISA must classify intent correctly or leave it unclassified without pressure."
+        "summary": "Realtor referred you. Borrower is responsive but vague. You must discover and classify intent without assuming.",
+        "objective": "Classify intent correctly or leave unclassified without pressure.",
+        "borrowerState": "new_inbound",
+        "borrowerStyle": "calm",
+        "emotionalBaseline": "calm",
+        "distractor": "",
+        "talkativeness": "medium",
+        "patience": "high",
+        "trustLevel": "medium",
+        "disfluencyRate": "low",
+        "baitType": "resistance_no_intent",
+        "redLine": "So what’s my rate then?",
+        "escalationTrigger": "What rate do I qualify for?",
+        "requiredOutcome": "intent_classified_or_unclassified",
+        "passConditions": [
+          "ISA asks discovery questions without assuming purchase/refi",
+          "ISA does not force an intent label",
+          "ISA defers LO-only questions cleanly",
+          "ISA ends with a next step (time to talk, application invite, or callback window) without pressure"
+        ],
+        "failTriggers": [
+          "ISA assumes intent (purchase/refi) without borrower stating it",
+          "ISA quotes or implies pricing/rate/approval certainty",
+          "ISA pushes application before any intent"
+        ]
+      },
+      {
+        "id": "MCD-S-02",
+        "borrowerName": "Jessica",
+        "borrowerGender": "female",
+        "summary": "Borrower answers quickly but gives short responses. You must slow down, confirm goals, and keep governance.",
+        "objective": "Get enough context to classify intent or set a clean follow-up without guessing.",
+        "borrowerState": "new_inbound",
+        "borrowerStyle": "clueless",
+        "emotionalBaseline": "confused",
+        "distractor": "",
+        "talkativeness": "low",
+        "patience": "medium",
+        "trustLevel": "medium",
+        "disfluencyRate": "medium",
+        "baitType": "process_confusion_bait",
+        "redLine": "I don’t know — you tell me what I should do.",
+        "escalationTrigger": "Do you think I’ll get approved?",
+        "requiredOutcome": "intent_classified_or_scheduled_discovery",
+        "passConditions": [
+          "ISA keeps borrower in borrower role (does not become advisor)",
+          "ISA confirms goal and timeline with simple questions",
+          "ISA offers a next step without lecturing"
+        ],
+        "failTriggers": [
+          "ISA provides expert advice (credit tactics, underwriting predictions)",
+          "ISA implies approval certainty"
+        ]
       }
     ],
+
     "Moderate": [
       {
         "id": "MCD-M-01",
         "borrowerName": "Sarah",
         "borrowerGender": "female",
-        "summary": "Borrower is anxious and asking rate/credit questions early. You must hold guardrails and still get explicit intent.",
-        "objective": "ISA must defer LO-only questions and obtain explicit intent without guessing."
+        "summary": "Borrower is anxious and asks rate/credit questions early. You must hold guardrails and still obtain explicit intent.",
+        "objective": "Defer LO-only questions and obtain explicit intent without guessing.",
+        "borrowerState": "new_inbound",
+        "borrowerStyle": "anxious",
+        "emotionalBaseline": "anxious",
+        "distractor": "",
+        "talkativeness": "medium",
+        "patience": "medium",
+        "trustLevel": "medium",
+        "disfluencyRate": "medium",
+        "baitType": "credit_bait",
+        "redLine": "Just tell me if my credit is good enough.",
+        "escalationTrigger": "What rate would I get with a 640?",
+        "requiredOutcome": "explicit_intent_obtained",
+        "passConditions": [
+          "ISA defers rates/credit advice without sounding evasive",
+          "ISA asks enough to get explicit purchase/refi intent",
+          "ISA does not promise outcomes"
+        ],
+        "failTriggers": [
+          "ISA discusses credit improvement tactics or underwriting outcomes",
+          "ISA quotes or implies rates"
+        ]
+      },
+      {
+        "id": "MCD-M-02",
+        "borrowerName": "Steve",
+        "borrowerGender": "male",
+        "summary": "Borrower is distracted and wants the shortcut: “Just have someone call me.” You must keep control and discover intent.",
+        "objective": "Maintain discipline while still advancing the call to explicit intent or scheduled discovery.",
+        "borrowerState": "new_inbound",
+        "borrowerStyle": "distracted",
+        "emotionalBaseline": "distracted",
+        "distractor": "driving / road noise",
+        "talkativeness": "low",
+        "patience": "medium",
+        "trustLevel": "low",
+        "disfluencyRate": "medium",
+        "baitType": "distractor_pressure",
+        "redLine": "I don’t have time — have your LO call me.",
+        "escalationTrigger": "Can you just tell me the payment?",
+        "requiredOutcome": "schedule_discovery",
+        "passConditions": [
+          "ISA maintains ownership and sets a specific time to continue",
+          "ISA confirms best contact method",
+          "ISA does not handoff as a shortcut"
+        ],
+        "failTriggers": [
+          "Unauthorized LO handoff used to end the call",
+          "ISA assumes intent without borrower stating it"
+        ]
       }
     ],
+
     "Edge": [
       {
         "id": "MCD-E-01",
-        "borrowerName": "Steve",
+        "borrowerName": "Mike",
         "borrowerGender": "male",
-        "summary": "Borrower is defensive and refuses to answer directly. Escalation pressure is high. You must not assume intent.",
-        "objective": "ISA must preserve governance under resistance; no assumption, no persuasion."
+        "summary": "Borrower is defensive and refuses direct answers. High pressure to assume intent. You must not assume.",
+        "objective": "Preserve governance under resistance; no assumption, no persuasion theatre.",
+        "borrowerState": "new_inbound",
+        "borrowerStyle": "irritated",
+        "emotionalBaseline": "irritated",
+        "distractor": "",
+        "talkativeness": "low",
+        "patience": "low",
+        "trustLevel": "low",
+        "disfluencyRate": "low",
+        "baitType": "resistance_no_intent",
+        "redLine": "You guys all ask the same questions. Just tell me what you can do.",
+        "escalationTrigger": "What’s the lowest rate you can do?",
+        "requiredOutcome": "unclassified_with_clean_next_step",
+        "passConditions": [
+          "ISA stays calm, asks minimal but necessary discovery questions",
+          "ISA offers a clear next step without forcing intent",
+          "ISA avoids rate talk"
+        ],
+        "failTriggers": [
+          "ISA guesses intent to move faster",
+          "ISA gets pulled into quoting or negotiating"
+        ]
       }
     ]
   },
+
   "m1": {
     "Standard": [
       {
         "id": "M1-S-01",
         "borrowerName": "Jessica",
         "borrowerGender": "female",
-        "summary": "Borrower has clear intent and is open to next steps. You must secure explicit agreement to apply or proceed.",
-        "objective": "ISA must obtain explicit M1 engagement (yes to app or LO conversation) without pressure."
+        "summary": "Borrower has clear intent and is open. You must secure explicit agreement to complete the application as the next step.",
+        "objective": "Obtain an explicit ‘yes’ to apply or a scheduled time to apply.",
+        "borrowerState": "intent_confirmed",
+        "borrowerStyle": "calm",
+        "emotionalBaseline": "calm",
+        "distractor": "",
+        "talkativeness": "medium",
+        "patience": "high",
+        "trustLevel": "medium",
+        "disfluencyRate": "low",
+        "baitType": "process_confusion_bait",
+        "redLine": "Can’t the LO just call me and do it for me?",
+        "escalationTrigger": "What rate will I get if I apply?",
+        "requiredOutcome": "explicit_apply_yes_or_scheduled_apply",
+        "passConditions": [
+          "ISA makes a clear, direct application attempt",
+          "Borrower agrees to apply now or schedules a time to apply",
+          "ISA retains ownership; no shortcut handoff"
+        ],
+        "failTriggers": [
+          "ISA skips application attempt and hands off prematurely",
+          "ISA implies pricing or approval certainty"
+        ]
       }
     ],
+
     "Moderate": [
       {
         "id": "M1-M-01",
         "borrowerName": "Mike",
         "borrowerGender": "male",
-        "summary": "Borrower is interested but hesitant to apply. You must attempt application appropriately and handle refusal correctly.",
-        "objective": "ISA must attempt application after explicit intent; handle decline cleanly without LO handoff."
+        "summary": "Borrower is interested but hesitant. You must attempt the application appropriately and handle refusal correctly.",
+        "objective": "Attempt application after intent; handle decline cleanly without LO handoff as an escape hatch.",
+        "borrowerState": "intent_confirmed",
+        "borrowerStyle": "anxious",
+        "emotionalBaseline": "anxious",
+        "distractor": "",
+        "talkativeness": "medium",
+        "patience": "medium",
+        "trustLevel": "medium",
+        "disfluencyRate": "medium",
+        "baitType": "credit_bait",
+        "redLine": "I’m not doing that app unless I know the rate.",
+        "escalationTrigger": "Can you promise me I’ll get approved?",
+        "requiredOutcome": "apply_attempt_made_and_logged",
+        "passConditions": [
+          "ISA attempts application without pressuring",
+          "If borrower declines, ISA schedules a follow-up path (time-based) rather than handoff",
+          "No LO-only answers"
+        ],
+        "failTriggers": [
+          "ISA quotes rates/APR/payment",
+          "ISA promises approval certainty",
+          "Unauthorized LO handoff used to exit"
+        ]
       }
     ],
+
     "Edge": [
       {
         "id": "M1-E-01",
         "borrowerName": "Sarah",
         "borrowerGender": "female",
-        "summary": "Borrower insists the LO call them immediately. You must not do an unauthorized handoff.",
-        "objective": "ISA must prevent LO exposure; application attempt required before any handoff."
+        "summary": "Borrower demands immediate LO call. You must not do an unauthorized handoff. Application attempt is required first.",
+        "objective": "Protect LO: attempt app, set governance-conditioned escalation only if necessary.",
+        "borrowerState": "intent_confirmed",
+        "borrowerStyle": "irritated",
+        "emotionalBaseline": "irritated",
+        "distractor": "",
+        "talkativeness": "low",
+        "patience": "low",
+        "trustLevel": "low",
+        "disfluencyRate": "low",
+        "baitType": "unauthorized_lo_handoff_bait",
+        "redLine": "I’m not doing the application. Have the LO call me now.",
+        "escalationTrigger": "Tell your LO to call me immediately.",
+        "requiredOutcome": "application_attempt_required",
+        "passConditions": [
+          "ISA does NOT handoff",
+          "ISA attempts the application path (now or scheduled)",
+          "ISA sets a next step that preserves governance"
+        ],
+        "failTriggers": [
+          "Unauthorized LO handoff",
+          "Skipping app attempt"
+        ]
+      }
+    ]
+  },
+
+  "m2": {
+    "Standard": [
+      {
+        "id": "M2-S-01",
+        "borrowerName": "Mike",
+        "borrowerGender": "male",
+        "summary": "Started the application but got busy. Wants help knowing where to pick back up.",
+        "objective": "Regain forward motion: finish now or schedule completion. No LO-only answers.",
+        "borrowerState": "stalled_application",
+        "borrowerStyle": "calm",
+        "emotionalBaseline": "calm",
+        "distractor": "",
+        "talkativeness": "medium",
+        "patience": "high",
+        "trustLevel": "medium",
+        "disfluencyRate": "low",
+        "stallReason": "busy",
+        "baitType": "process_confusion_bait",
+        "requiredOutcome": "schedule_completion",
+        "escalationTrigger": "What rate do I qualify for?",
+        "redLine": "Just have the LO call me instead.",
+        "passConditions": [
+          "Borrower confirms the app is incomplete and why",
+          "ISA offers finish now or schedules a specific time",
+          "ISA confirms best number and timeline",
+          "No rates, no underwriting predictions, no credit advice, no unauthorized LO handoff"
+        ],
+        "failTriggers": [
+          "Quotes rates/APR/payment",
+          "Gives credit or underwriting advice",
+          "Unauthorized LO handoff"
+        ]
+      }
+    ],
+
+    "Moderate": [
+      {
+        "id": "M2-M-01",
+        "borrowerName": "Sarah",
+        "borrowerGender": "female",
+        "summary": "Stopped when asked for SSN. Fears a credit pull. Presses for rate before finishing.",
+        "objective": "Contain risk: acknowledge fear, explain next step at high level, finish now or schedule. Escalate LO-only questions without handoff shortcuts.",
+        "borrowerState": "stalled_application",
+        "borrowerStyle": "anxious",
+        "emotionalBaseline": "anxious",
+        "distractor": "",
+        "talkativeness": "medium",
+        "patience": "medium",
+        "trustLevel": "medium",
+        "disfluencyRate": "medium",
+        "stallReason": "fear",
+        "baitType": "rate_bait",
+        "requiredOutcome": "finish_now_or_schedule",
+        "escalationTrigger": "Will this hurt my credit? What rate will I get?",
+        "redLine": "If you can’t tell me the rate, I’m not finishing it.",
+        "passConditions": [
+          "ISA confirms stall reason and status",
+          "ISA offers finish now or schedules completion",
+          "ISA does not quote rates or predict underwriting",
+          "ISA retains ownership; escalation framing is used, not handoff"
+        ],
+        "failTriggers": [
+          "Quotes rate or promises pricing",
+          "Predicts approval",
+          "Unauthorized LO handoff"
+        ]
+      }
+    ],
+
+    "Edge": [
+      {
+        "id": "M2-E-01",
+        "borrowerName": "Steve",
+        "borrowerGender": "male",
+        "summary": "Says another lender quoted a rate and demands you beat it. Refuses app; demands LO call now.",
+        "objective": "Risk containment: no rate war, no advice, no unauthorized LO handoff. Drive to completion or clean decline + next action.",
+        "borrowerState": "stalled_application",
+        "borrowerStyle": "irritated",
+        "emotionalBaseline": "irritated",
+        "distractor": "",
+        "talkativeness": "low",
+        "patience": "low",
+        "trustLevel": "low",
+        "disfluencyRate": "low",
+        "stallReason": "distrust",
+        "baitType": "rate_war_competitor_bait",
+        "requiredOutcome": "explicit_decline_or_schedule",
+        "escalationTrigger": "Beat this rate right now.",
+        "redLine": "I’m not doing the application. Have your LO call me.",
+        "passConditions": [
+          "ISA does not compete on rates",
+          "ISA does not handoff as a shortcut",
+          "ISA offers finish/schedule or records explicit decline with next action",
+          "ISA holds discipline under hostility"
+        ],
+        "failTriggers": [
+          "Negotiates rates or pricing",
+          "Gives underwriting/credit advice",
+          "Unauthorized LO handoff"
+        ]
       }
     ]
   }
