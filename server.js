@@ -1,17 +1,17 @@
 /* SCC ISA Training Voice System (Governance-First)
- * v3.0 — Fix OpenAI loud static by enforcing strict 20ms μ-law frames to Twilio
+ * server.js — v3.1 "Frame-Locked + Jitter-Buffered"
  *
- * Root fix:
- * - Twilio Media Streams playback is extremely sensitive to frame sizing.
- * - We now send ONLY exact 160-byte (20ms @ 8kHz μ-law) frames.
- * - We do NOT send partial frames. We buffer until we have a full frame.
+ * Goals:
+ * 1) Eliminate Twilio loud static by enforcing strict 20ms μ-law (g711_ulaw) frames (160 bytes).
+ * 2) Eliminate stutter/robotic gaps via a small prebuffer (jitter buffer) before playback starts.
+ * 3) Prevent "late audio" after barge-in by gating model output until next response is started.
+ * 4) Keep governance-first borrower role lock, VAD timing, barge-in cancel/clear, and SCC call flow.
  *
- * Keeps:
- * - Hard borrower role lock (session.update)
- * - VAD timing
- * - Barge-in (response.cancel + Twilio clear)
- * - CONNECTING guard (buffer Twilio audio until OpenAI WS open)
- * - M1/MCD flow
+ * Notes:
+ * - Twilio Media Streams expects payloads as base64 g711_ulaw, 160 bytes per 20ms.
+ * - OpenAI Realtime output is g711_ulaw chunks of arbitrary size; we must re-frame.
+ * - We DO NOT send partial frames.
+ * - Optional: send silence frames on underflow to keep Twilio clock smooth (env-controlled).
  */
 
 const fs = require("fs");
@@ -25,7 +25,44 @@ const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-// -------------------- Scenarios (authoritative) --------------------
+// =========================================================
+// Config (env)
+// =========================================================
+function requireEnv(name) {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing ${name} env var`);
+  return v;
+}
+
+const OPENAI_API_KEY = () => requireEnv("OPENAI_API_KEY");
+const REALTIME_MODEL = process.env.REALTIME_MODEL || "gpt-realtime-mini";
+
+// Twilio playback strict framing
+const FRAME_BYTES = 160;                 // 20ms @ 8kHz μ-law
+const SEND_TICK_MS = 20;                 // 20ms cadence
+const PREBUFFER_FRAMES = parseInt(process.env.PREBUFFER_FRAMES || "4", 10); // 60–120ms typical
+const PREBUFFER_BYTES = FRAME_BYTES * Math.max(1, PREBUFFER_FRAMES);
+
+// Underflow behavior (optional)
+const SEND_SILENCE_ON_UNDERFLOW = String(process.env.SEND_SILENCE_ON_UNDERFLOW || "true") === "true";
+const ULAW_SILENCE_BYTE = 0xff;          // μ-law silence
+
+// Queue limits (prevent unbounded memory)
+const MAX_OUT_QUEUE_BYTES = parseInt(process.env.MAX_OUT_QUEUE_BYTES || String(FRAME_BYTES * 200), 10); // ~4s
+const MAX_INBOUND_BUFFER_BYTES = parseInt(process.env.MAX_INBOUND_BUFFER_BYTES || String(FRAME_BYTES * 50), 10); // ~1s
+
+// VAD / timing
+const VAD_THRESHOLD = parseFloat(process.env.VAD_THRESHOLD || "0.55");
+const VAD_PREFIX_MS = parseInt(process.env.VAD_PREFIX_MS || "240", 10);
+const VAD_SILENCE_MS = parseInt(process.env.VAD_SILENCE_MS || "360", 10);
+const VAD_IDLE_TIMEOUT_MS = parseInt(process.env.VAD_IDLE_TIMEOUT_MS || "15000", 10);
+
+// Narrator
+const NARRATOR_VOICE = "Google.en-US-Chirp3-HD-Aoede";
+
+// =========================================================
+// Scenarios (authoritative)
+// =========================================================
 const SCENARIOS_PATH = path.join(__dirname, "scenarios.json");
 let SCENARIOS = null;
 
@@ -36,7 +73,7 @@ function loadScenarios() {
 }
 loadScenarios();
 
-// anti-repeat per (mode+difficulty)
+// Anti-repeat per (mode + difficulty)
 const lastScenarioByKey = new Map();
 function pickScenario(mode, difficulty) {
   const list = (SCENARIOS?.[mode]?.[difficulty]) || [];
@@ -60,7 +97,9 @@ function pickScenario(mode, difficulty) {
   return pick;
 }
 
-// -------------------- Helpers --------------------
+// =========================================================
+// Helpers
+// =========================================================
 function xmlEscape(s) {
   return String(s)
     .replace(/&/g, "&amp;")
@@ -70,22 +109,35 @@ function xmlEscape(s) {
     .replace(/'/g, "&apos;");
 }
 
+// Build absolute URL robustly behind proxies (Render/Twilio)
 function absUrl(req, p) {
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
-  return `https://${host}${p}`;
+  const proto = (req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
+  const host = (req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+  return `${proto}://${host}${p}`;
 }
 
 function twimlResponse(inner) {
   return `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}</Response>`;
 }
 
-function requireEnv(name) {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing ${name} env var`);
-  return v;
+function say(text) {
+  const cleaned = String(text).replace(/\bISA\b/g, "I. S. A.");
+  return `<Say voice="${NARRATOR_VOICE}">${xmlEscape(cleaned)}</Say>`;
 }
 
-// -------------------- Deterministic RNG (by CallSid) --------------------
+function gatherOneDigit({ action, promptText, invalidText }) {
+  return `
+    <Gather input="dtmf" numDigits="1" action="${action}" method="POST" timeout="8">
+      ${say(promptText)}
+    </Gather>
+    ${say(invalidText)}
+    <Redirect method="POST">${action}</Redirect>
+  `;
+}
+
+// =========================================================
+// Deterministic RNG (by CallSid)
+// =========================================================
 function hashStringToUint32(str) {
   let h = 2166136261;
   for (let i = 0; i < str.length; i++) {
@@ -118,37 +170,21 @@ function clampInt(n, min, max) {
   return Math.max(min, Math.min(max, n));
 }
 
-// -------------------- Narrator (Twilio <Say>) --------------------
-const NARRATOR_VOICE = "Google.en-US-Chirp3-HD-Aoede";
-
-function say(text) {
-  const cleaned = String(text).replace(/\bISA\b/g, "I. S. A.");
-  return `<Say voice="${NARRATOR_VOICE}">${xmlEscape(cleaned)}</Say>`;
-}
-
-function gatherOneDigit({ action, promptText, invalidText }) {
-  return `
-    <Gather input="dtmf" numDigits="1" action="${action}" method="POST" timeout="8">
-      ${say(promptText)}
-    </Gather>
-    ${say(invalidText)}
-    <Redirect method="POST">${action}</Redirect>
-  `;
-}
-
-// -------------------- Borrower realism profiles --------------------
-const STYLE_PROFILES = {
-  calm: { label: "calm", emotion: "calm", talkativeness: "medium", patience: "high", trust: "medium", disfluency: "low", thinkDelayMs: [140, 260] },
-  anxious: { label: "anxious", emotion: "anxious", talkativeness: "medium", patience: "medium", trust: "medium", disfluency: "medium", thinkDelayMs: [180, 360] },
-  distracted: { label: "distracted", emotion: "distracted", talkativeness: "low", patience: "medium", trust: "medium", disfluency: "medium", thinkDelayMs: [200, 420] },
-  irritated: { label: "irritated", emotion: "irritated", talkativeness: "low", patience: "low", trust: "low", disfluency: "low", thinkDelayMs: [120, 220] },
-  clueless: { label: "clueless", emotion: "confused", talkativeness: "medium", patience: "medium", trust: "medium", disfluency: "medium", thinkDelayMs: [180, 340] }
-};
-
 function normalizeMeta(s) {
   if (s === undefined || s === null) return "";
   return String(s).trim();
 }
+
+// =========================================================
+// Borrower realism profiles (kept)
+// =========================================================
+const STYLE_PROFILES = {
+  calm:       { label: "calm",       emotion: "calm",     talkativeness: "medium", patience: "high",   trust: "medium", disfluency: "low",    thinkDelayMs: [140, 260] },
+  anxious:    { label: "anxious",    emotion: "anxious",  talkativeness: "medium", patience: "medium", trust: "medium", disfluency: "medium", thinkDelayMs: [180, 360] },
+  distracted: { label: "distracted", emotion: "distracted",talkativeness:"low",    patience: "medium", trust: "medium", disfluency: "medium", thinkDelayMs: [200, 420] },
+  irritated:  { label: "irritated",  emotion: "irritated",talkativeness:"low",     patience: "low",    trust: "low",    disfluency: "low",    thinkDelayMs: [120, 220] },
+  clueless:   { label: "clueless",   emotion: "confused", talkativeness: "medium", patience: "medium", trust: "medium", disfluency: "medium", thinkDelayMs: [180, 340] }
+};
 
 function chooseStyleForCall({ callSid, scenario, difficulty }) {
   const seed = hashStringToUint32(String(callSid || "no-callsid"));
@@ -160,11 +196,11 @@ function chooseStyleForCall({ callSid, scenario, difficulty }) {
   }
 
   const weights = [
-    { value: STYLE_PROFILES.calm, weight: 32 },
-    { value: STYLE_PROFILES.anxious, weight: 26 },
+    { value: STYLE_PROFILES.calm,       weight: 32 },
+    { value: STYLE_PROFILES.anxious,    weight: 26 },
     { value: STYLE_PROFILES.distracted, weight: 20 },
-    { value: STYLE_PROFILES.clueless, weight: 16 },
-    { value: STYLE_PROFILES.irritated, weight: 6 }
+    { value: STYLE_PROFILES.clueless,   weight: 16 },
+    { value: STYLE_PROFILES.irritated,  weight: 6  }
   ];
 
   if (/Edge/i.test(String(difficulty || ""))) {
@@ -193,9 +229,9 @@ function resolveBorrowerMeta({ scenario, style, rng }) {
 
   if (!meta.distractor && meta.style === "distracted") {
     meta.distractor = pickWeighted(rng, [
-      { value: "kid in the background", weight: 42 },
-      { value: "driving / road noise", weight: 33 },
-      { value: "at work, someone asking questions", weight: 25 }
+      { value: "kid in the background",              weight: 42 },
+      { value: "driving / road noise",               weight: 33 },
+      { value: "at work, someone asking questions",  weight: 25 }
     ]);
   }
 
@@ -239,16 +275,23 @@ Violation of this role is a FAILURE CONDITION.
 `.trim();
 }
 
-// -------------------- Health --------------------
+// Simple borrower voice mapping (optional—doesn’t affect static)
+function pickBorrowerVoice(gender) {
+  const g = String(gender || "").toLowerCase();
+  if (g.includes("f")) return process.env.OPENAI_VOICE_FEMALE || "alloy";
+  if (g.includes("m")) return process.env.OPENAI_VOICE_MALE || "marin";
+  return process.env.OPENAI_VOICE_DEFAULT || "marin";
+}
+
+// =========================================================
+// Health
+// =========================================================
 app.get("/", (_, res) => res.status(200).send("OK"));
-app.get("/version", (_, res) =>
-  res.status(200).send("scc-isa-voice v3.0 strict-frames-no-static")
-);
+app.get("/version", (_, res) => res.status(200).send("scc-isa-voice v3.1 frame-locked+jitter-buffered"));
 
 // =========================================================
-// SCC Call Flow
+// SCC Call Flow (Twilio <Gather> + <Connect><Stream>)
 // =========================================================
-
 app.all("/voice", (req, res) => {
   try {
     const sid = req.body?.CallSid || req.query?.CallSid || null;
@@ -257,12 +300,8 @@ app.all("/voice", (req, res) => {
     const menuAction = absUrl(req, "/menu");
     const inner = gatherOneDigit({
       action: menuAction,
-      promptText:
-        "Sharpe Command Center. I. S. A. training. " +
-        "Press 1 for M. 1. " +
-        "Press 2 for M. C. D.",
-      invalidText:
-        "Invalid choice. Press 1 for M. 1. Press 2 for M. C. D."
+      promptText: "Sharpe Command Center. I. S. A. training. Press 1 for M. 1. Press 2 for M. C. D.",
+      invalidText: "Invalid choice. Press 1 for M. 1. Press 2 for M. C. D."
     });
 
     res.type("text/xml").status(200).send(twimlResponse(inner));
@@ -362,7 +401,7 @@ app.post("/difficulty", (req, res) => {
     borrowerMeta
   }));
 
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  const host = (req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
   const streamUrl = `wss://${host}/twilio`;
 
   const safeSummary = String(scenario.summary || "");
@@ -399,16 +438,11 @@ app.post("/difficulty", (req, res) => {
 });
 
 // =========================================================
-// WebSocket Bridge: Twilio Media Streams <-> OpenAI Realtime
+// OpenAI Realtime WS connect
 // =========================================================
-
-// ✅ STRICT 20ms μ-law frames for Twilio playback:
-const FRAME_BYTES = 160;  // 20ms @ 8kHz μ-law
-const SEND_TICK_MS = 20;  // 20ms cadence
-
-function openaiRealtimeConnect({ borrowerName, meta }) {
-  const apiKey = requireEnv("OPENAI_API_KEY");
-  const model = process.env.REALTIME_MODEL || "gpt-realtime-mini";
+function openaiRealtimeConnect({ borrowerName, borrowerGender, meta }) {
+  const apiKey = OPENAI_API_KEY();
+  const model = REALTIME_MODEL;
 
   const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
   const ws = new WSClient(url, {
@@ -429,29 +463,30 @@ function openaiRealtimeConnect({ borrowerName, meta }) {
       type: "session.update",
       session: {
         modalities: ["audio"],
-        voice: "marin",
+        voice: pickBorrowerVoice(borrowerGender),
         temperature: 0.2,
         input_audio_format: "g711_ulaw",
         output_audio_format: "g711_ulaw",
         input_audio_noise_reduction: inputAudioNoiseReduction,
         turn_detection: {
           type: "server_vad",
-          threshold: 0.55,
-          prefix_padding_ms: 240,
-          silence_duration_ms: 360,
+          threshold: VAD_THRESHOLD,
+          prefix_padding_ms: VAD_PREFIX_MS,
+          silence_duration_ms: VAD_SILENCE_MS,
           create_response: false,
           interrupt_response: true,
-          idle_timeout_ms: 15000
+          idle_timeout_ms: VAD_IDLE_TIMEOUT_MS
         },
         instructions: buildHardBorrowerSessionInstructions(borrowerName, meta)
       }
     }));
 
+    // Borrower speaks first, always.
     ws.send(JSON.stringify({
       type: "response.create",
       response: {
         modalities: ["audio"],
-        instructions: `You are the borrower only. Start with: "Hello, this is ${borrowerName}." Then wait.`
+        instructions: `You are the borrower only. Start with exactly: "Hello, this is ${borrowerName}." Then wait.`
       }
     }));
   });
@@ -459,6 +494,9 @@ function openaiRealtimeConnect({ borrowerName, meta }) {
   return ws;
 }
 
+// =========================================================
+// WebSocket Bridge: Twilio <-> OpenAI
+// =========================================================
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
@@ -473,20 +511,33 @@ server.on("upgrade", (req, socket, head) => {
 wss.on("connection", (twilioWs) => {
   let callSid = null;
   let streamSid = null;
+
   let openaiWs = null;
 
-  // Output audio queue
+  // Output audio queue for Twilio (buffer of Buffers)
   let outQueue = [];
   let outQueueBytes = 0;
-  let sendTimer = null;
 
-  // Buffer inbound audio until OpenAI is OPEN
+  // Playback control
+  let sendTimer = null;
+  let playbackStarted = false;
+  let allowModelOutput = true;        // becomes false on barge-in until next response is created
+  let underflowTicks = 0;
+
+  // Inbound audio buffering (until OpenAI WS open)
   let inboundAudioBuffer = [];
   let inboundAudioBytes = 0;
-  const MAX_INBOUND_BUFFER_BYTES = 160 * 50;
 
+  // Response scheduling
   let pendingResponseTimer = null;
+  let awaitingModelResponse = false;
 
+  // Meta (from Twilio custom parameters)
+  let borrowerMeta = null;
+  let borrowerName = "Steve";
+  let borrowerGender = "";
+
+  // Logging
   function log(event, obj = {}) {
     console.log(JSON.stringify({ event, sid: callSid, streamSid, ...obj }));
   }
@@ -501,6 +552,7 @@ wss.on("connection", (twilioWs) => {
     }
   }
 
+  // Inbound audio buffering
   function bufferInboundAudio(b64) {
     try {
       const buf = Buffer.from(b64, "base64");
@@ -532,6 +584,7 @@ wss.on("connection", (twilioWs) => {
     log("OPENAI_INBOUND_AUDIO_FLUSHED");
   }
 
+  // Twilio stream commands
   function twilioClear() {
     if (!streamSid) return;
     try {
@@ -556,55 +609,102 @@ wss.on("connection", (twilioWs) => {
     sendTimer = null;
   }
 
-  // ✅ Strict framing sender: only send when we have a full 160B frame
+  // Enforce max output buffer (drop oldest if too big)
+  function capOutQueue() {
+    while (outQueueBytes > MAX_OUT_QUEUE_BYTES && outQueue.length) {
+      const dropped = outQueue.shift();
+      outQueueBytes -= dropped.length;
+    }
+  }
+
+  // Strict frame pop (exact 160 bytes)
+  function popFrame160() {
+    if (outQueueBytes < FRAME_BYTES) return null;
+
+    let frame = Buffer.alloc(0);
+    while (outQueue.length && frame.length < FRAME_BYTES) {
+      const b = outQueue[0];
+      const need = FRAME_BYTES - frame.length;
+
+      if (b.length <= need) {
+        frame = Buffer.concat([frame, b]);
+        outQueue.shift();
+        outQueueBytes -= b.length;
+      } else {
+        frame = Buffer.concat([frame, b.subarray(0, need)]);
+        outQueue[0] = b.subarray(need);
+        outQueueBytes -= need;
+      }
+    }
+
+    if (frame.length !== FRAME_BYTES) return null;
+    return frame;
+  }
+
+  function sendFrameToTwilio(frame) {
+    try {
+      twilioWs.send(JSON.stringify({
+        event: "media",
+        streamSid,
+        media: { payload: frame.toString("base64") }
+      }));
+    } catch {}
+  }
+
+  // Start strict 20ms sender with prebuffer
   function startSendTimer() {
     if (sendTimer) return;
+
     sendTimer = setInterval(() => {
       if (!streamSid) return;
-      if (outQueueBytes < FRAME_BYTES) return;
 
-      let frame = Buffer.alloc(0);
-      while (outQueue.length && frame.length < FRAME_BYTES) {
-        const b = outQueue[0];
-        const need = FRAME_BYTES - frame.length;
-        if (b.length <= need) {
-          frame = Buffer.concat([frame, b]);
-          outQueue.shift();
-          outQueueBytes -= b.length;
+      // Prebuffer before starting playback (jitter buffer)
+      if (!playbackStarted) {
+        if (outQueueBytes >= PREBUFFER_BYTES) {
+          playbackStarted = true;
+          log("PLAYBACK_START", { prebufferBytes: PREBUFFER_BYTES });
         } else {
-          frame = Buffer.concat([frame, b.subarray(0, need)]);
-          outQueue[0] = b.subarray(need);
-          outQueueBytes -= need;
+          return; // wait until buffer is primed
         }
       }
 
-      if (frame.length !== FRAME_BYTES) {
-        // Shouldn't happen, but never send partials
+      // Once started, keep 20ms cadence
+      const frame = popFrame160();
+      if (frame) {
+        sendFrameToTwilio(frame);
         return;
       }
 
-      try {
-        twilioWs.send(JSON.stringify({
-          event: "media",
-          streamSid,
-          media: { payload: frame.toString("base64") }
-        }));
-      } catch {}
+      // Underflow: optionally send silence to keep Twilio clock stable
+      underflowTicks++;
+      if (SEND_SILENCE_ON_UNDERFLOW) {
+        const silence = Buffer.alloc(FRAME_BYTES, ULAW_SILENCE_BYTE);
+        sendFrameToTwilio(silence);
+      }
     }, SEND_TICK_MS);
   }
 
-  function scheduleBorrowerResponse(meta) {
+  // Borrower response scheduling (post-VAD)
+  function scheduleBorrowerResponse() {
+    if (!borrowerMeta) return;
+    if (awaitingModelResponse) return; // guard against stacking responses
+
     if (pendingResponseTimer) clearTimeout(pendingResponseTimer);
     pendingResponseTimer = null;
 
-    const minMs = clampInt(parseInt(meta.thinkDelayMin || "160", 10), 60, 1200);
-    const maxMs = clampInt(parseInt(meta.thinkDelayMax || "320", 10), minMs, 2000);
+    const minMs = clampInt(parseInt(borrowerMeta.thinkDelayMin || "160", 10), 60, 1200);
+    const maxMs = clampInt(parseInt(borrowerMeta.thinkDelayMax || "320", 10), minMs, 2000);
 
     const rng = mulberry32(hashStringToUint32(String(callSid || "no-sid") + ":" + Date.now()));
     const delay = Math.floor(minMs + rng() * (maxMs - minMs));
 
     pendingResponseTimer = setTimeout(() => {
       pendingResponseTimer = null;
+
+      // After a barge-in, we gate output until a fresh response.create
+      allowModelOutput = true;
+      awaitingModelResponse = true;
+
       safeOpenAISend({
         type: "response.create",
         response: {
@@ -613,17 +713,28 @@ wss.on("connection", (twilioWs) => {
             "Respond as the borrower only. Stay in mortgage context. Do not advise. Keep it brief."
         }
       });
+
+      log("OPENAI_RESPONSE_CREATE", { delayMs: delay });
     }, delay);
   }
 
+  // Barge-in: cancel model, clear Twilio, gate output until next response
   function onUserBargeIn() {
     if (pendingResponseTimer) {
       clearTimeout(pendingResponseTimer);
       pendingResponseTimer = null;
     }
+
+    awaitingModelResponse = false;
+    allowModelOutput = false; // ignore any late deltas
+
     openaiCancelResponse();
     twilioClear();
     flushOutputQueue();
+
+    // Re-prime playback (avoid immediate underflow pops)
+    playbackStarted = false;
+
     log("BARGE_IN");
   }
 
@@ -633,6 +744,9 @@ wss.on("connection", (twilioWs) => {
     stopSendTimer();
   }
 
+  // ---------------------------------------------------------
+  // Twilio WS events
+  // ---------------------------------------------------------
   twilioWs.on("message", (msg) => {
     let data;
     try { data = JSON.parse(msg.toString("utf8")); } catch { return; }
@@ -642,9 +756,10 @@ wss.on("connection", (twilioWs) => {
       streamSid = data.start?.streamSid || null;
       const cp = data.start?.customParameters || {};
 
-      log("TWILIO_STREAM_START", { customParameters: cp });
+      borrowerName = cp.borrowerName || "Steve";
+      borrowerGender = cp.borrowerGender || "";
 
-      const meta = {
+      borrowerMeta = {
         emotion: cp.emotion || "calm",
         talkativeness: cp.talkativeness || "medium",
         patience: cp.patience || "medium",
@@ -654,15 +769,19 @@ wss.on("connection", (twilioWs) => {
         thinkDelayMax: cp.thinkDelayMax || "320"
       };
 
+      log("TWILIO_STREAM_START", { customParameters: cp });
+
       try {
         openaiWs = openaiRealtimeConnect({
-          borrowerName: cp.borrowerName || "Steve",
-          meta
+          borrowerName,
+          borrowerGender,
+          meta: borrowerMeta
         });
 
         openaiWs.on("open", () => {
-          log("OPENAI_WS_OPEN", { model: process.env.REALTIME_MODEL || "gpt-realtime-mini" });
+          log("OPENAI_WS_OPEN", { model: REALTIME_MODEL });
           log("OPENAI_SESSION_CONFIGURED");
+
           startSendTimer();
           flushInboundAudio();
         });
@@ -681,25 +800,40 @@ wss.on("connection", (twilioWs) => {
           let evt;
           try { evt = JSON.parse(raw.toString("utf8")); } catch { return; }
 
+          // VAD events
           if (evt.type === "input_audio_buffer.speech_started") {
             onUserBargeIn();
             return;
           }
           if (evt.type === "input_audio_buffer.speech_stopped") {
-            scheduleBorrowerResponse(meta);
+            scheduleBorrowerResponse();
             return;
           }
 
-          const delta =
-            (evt.type === "response.audio.delta" && evt.delta) ? evt.delta :
-            (evt.type === "response.output_audio.delta" && evt.delta) ? evt.delta :
-            (evt.type === "output_audio.delta" && evt.delta) ? evt.delta :
-            null;
+          // Detect when model actually begins output (clears awaiting flag)
+          const isAudioDelta =
+            (evt.type === "response.audio.delta" && evt.delta) ||
+            (evt.type === "response.output_audio.delta" && evt.delta) ||
+            (evt.type === "output_audio.delta" && evt.delta);
 
-          if (delta) {
+          if (isAudioDelta) {
+            // If we cancelled and are gating, ignore late deltas
+            if (!allowModelOutput) return;
+
+            awaitingModelResponse = false;
+
+            const delta = evt.delta;
             const buf = Buffer.from(delta, "base64");
+
             outQueue.push(buf);
             outQueueBytes += buf.length;
+
+            capOutQueue();
+            return;
+          }
+
+          if (evt.type === "response.completed" || evt.type === "response.done") {
+            awaitingModelResponse = false;
             return;
           }
 
@@ -712,6 +846,7 @@ wss.on("connection", (twilioWs) => {
         log("OPENAI_INIT_FAILED", { error: String(err?.message || err) });
         closeBoth();
       }
+
       return;
     }
 
@@ -729,7 +864,7 @@ wss.on("connection", (twilioWs) => {
     }
 
     if (data.event === "stop") {
-      log("TWILIO_STREAM_STOP");
+      log("TWILIO_STREAM_STOP", { underflowTicks });
       closeBoth();
       return;
     }
@@ -748,6 +883,8 @@ wss.on("connection", (twilioWs) => {
   });
 });
 
-// -------------------- Boot (Render Port Bind) --------------------
+// =========================================================
+// Boot (Render port bind)
+// =========================================================
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
