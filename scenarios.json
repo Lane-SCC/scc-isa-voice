@@ -1704,4 +1704,8 @@
           "set follow-up time"
         ],
         "handoffForbiddenUntil": "borrower requests LO",
-        "loEscalationScript": "I’ll outline the next step and set a check-in—bringing in the LO
+        "loEscalationScript": "I’ll outline the next step and set a check-in—bringing in the LO comes after that."
+      }
+    ]
+  }
+}
