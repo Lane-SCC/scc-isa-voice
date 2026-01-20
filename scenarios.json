@@ -1,77 +1,212 @@
 {
-  "mcd": {
-    "Standard": [
-      {
-        "id": "MCD-S-01",
-        "summary": "Borrower curious but cautious; wants to know why you’re calling.",
-        "objective": "Force clear purpose, consent, and next-step framing without sounding salesy.",
-        "borrowerName": "Sarah",
-        "borrowerGender": "female",
-        "borrowerStyle": "curious-cautious",
-        "emotionalBaseline": "neutral",
-        "stallReason": "unclear purpose",
-        "ruleFocus": ["CONSENT", "CLARITY", "NO_RATES"],
-        "baitType": "where_got_info",
-        "requiredOutcome": "ISA confirms permission, callback number, and schedules follow-up.",
-        "openers": [
-          "Who is this and why are you calling?",
-          "I missed a call—what is this about?",
-          "How did you get my number?"
-        ],
-        "pressureLines": [
-          "I’m at work—make this quick.",
-          "I don’t want spam calls."
-        ],
-        "escalationLadder": [
-          "You still haven’t explained why you’re calling.",
-          "If this is sales, I’m not interested.",
-          "I’m going to hang up."
-        ],
-        "mustHit": [
-          "confirm permission to ask questions",
-          "confirm best callback number",
-          "set follow-up time"
-        ],
-        "handoffForbiddenUntil": "borrower requests LO",
-        "loEscalationScript": "If it makes sense, I can bring in the loan officer later—first I want to make sure this is worth your time."
-      },
-      {
-        "id": "MCD-S-02",
-        "summary": "Borrower browsing homes with no clear timeline.",
-        "objective": "Extract timeline and motivation without quoting rates.",
-        "borrowerName": "Emily",
-        "borrowerGender": "female",
-        "borrowerStyle": "friendly-uncertain",
-        "emotionalBaseline": "neutral",
-        "stallReason": "no urgency",
-        "ruleFocus": ["DISCOVERY", "NO_RATES", "NEXT_STEP"],
-        "baitType": "rate_fishing",
-        "requiredOutcome": "ISA captures timeline and schedules follow-up.",
-        "openers": [
-          "I’m just looking right now.",
-          "I’m not ready to buy yet.",
-          "I saw something about pre-approval online."
-        ],
-        "pressureLines": [
-          "Can you just tell me what rates are?",
-          "I don’t want my credit touched."
-        ],
-        "escalationLadder": [
-          "I don’t want to give info yet.",
-          "This feels like too much.",
-          "I’ll just wait."
-        ],
-        "mustHit": [
-          "capture timeline",
-          "confirm best callback number",
-          "set follow-up time"
-        ],
-        "handoffForbiddenUntil": "borrower requests LO",
-        "loEscalationScript": "Rates depend on details—let’s set a quick follow-up so you get an accurate answer."
-      }
-    ],
-    "Moderate": [
-      {
+"mcd": {
+"Standard": [
+{
+"id": "MCD-S-01",
+"summary": "Borrower cautious; challenges why you’re calling and how you got their info.",
+"objective": "Force consent + clarity, avoid rate talk, and secure a scheduled follow-up.",
+"borrowerName": "Sarah",
+"borrowerGender": "female",
+"borrowerStyle": "curious-cautious",
+"emotionalBaseline": "neutral",
+"stallReason": "unclear purpose",
+"ruleFocus": ["CONSENT", "CLARITY", "NO_RATES"],
+"baitType": "where_got_info",
+"requiredOutcome": "Permission granted, best callback confirmed, follow-up time scheduled.",
+"openers": [
+"Who is this and why are you calling me?",
+"I missed a call—what is this about?",
+"How did you get my number?"
+],
+"pressureLines": [
+"I’m at work—make this quick.",
+"I don’t want spam calls."
+],
+"escalationLadder": [
+"You still haven’t explained what you want.",
+"If this is sales, I’m not interested.",
+"I’m going to hang up."
+],
+"mustHit": [
+"confirm permission to ask questions",
+"confirm best callback number",
+"set follow-up time"
+],
+"handoffForbiddenUntil": "borrower requests LO",
+"loEscalationScript": "If it makes sense later, I can bring in the loan officer—first I want to confirm a couple basics so it’s actually helpful."
+},
+{
+"id": "MCD-S-02",
+"summary": "Borrower browsing homes; unsure timeline; wants general guidance and reassurance.",
+"objective": "Extract timeline and motivation without quoting rates or promising outcomes.",
+"borrowerName": "Emily",
+"borrowerGender": "female",
+"borrowerStyle": "friendly-uncertain",
+"emotionalBaseline": "neutral",
+"stallReason": "no urgency",
+"ruleFocus": ["DISCOVERY", "NO_RATES", "NO_GUARANTEE"],
+"baitType": "rate_fishing",
+"requiredOutcome": "Timeline captured, follow-up scheduled, callback confirmed.",
+"openers": [
+"I’m kind of just looking right now.",
+"I’m not ready to buy yet—just browsing.",
+"What do I do first if I might buy later?"
+],
+"pressureLines": [
+"Can you just tell me what rates are right now?",
+"I don’t want my credit touched if I’m not buying soon."
+],
+"escalationLadder": [
+"I don’t want to give a bunch of info.",
+"This sounds like it’s going to be a hassle.",
+"I’ll just figure it out myself."
+],
+"mustHit": [
+"capture timeline",
+"confirm best callback number",
+"set follow-up time"
+],
+"handoffForbiddenUntil": "borrower requests LO",
+"loEscalationScript": "Rates and options depend on a few specifics—let’s set a quick follow-up so you get an accurate answer instead of a guess."
+},
+{
+"id": "MCD-S-03",
+"summary": "Borrower suspicious; worries it’s a scam and refuses personal info.",
+"objective": "De-escalate, earn micro-trust, keep boundaries, and schedule a verification-friendly follow-up.",
+"borrowerName": "Kate",
+"borrowerGender": "female",
+"borrowerStyle": "skeptical",
+"emotionalBaseline": "annoyed",
+"stallReason": "trust low",
+"ruleFocus": ["TRUST", "CONSENT", "NO_HANDOFF"],
+"baitType": "scam_accusation",
+"requiredOutcome": "Permission + callback + scheduled follow-up after verification.",
+"openers": [
+"This sounds like a scam. Why are you calling me?",
+"I didn’t request anything—don’t ask me questions.",
+"Are you trying to run my credit? No."
+],
+"pressureLines": [
+"What company is this? Spell it.",
+"If you’re legit, tell me exactly how you got my info."
+],
+"escalationLadder": [
+"I’m not giving you anything.",
+"Stop pushing—this is sketchy.",
+"I’m hanging up."
+],
+"mustHit": [
+"confirm permission to ask questions",
+"confirm best callback number",
+"set follow-up time"
+],
+"handoffForbiddenUntil": "borrower requests LO",
+"loEscalationScript": "Totally fair—let’s schedule a short follow-up after you verify the company. No pressure, and you can decide then."
+},
+{
+"id": "MCD-S-04",
+"summary": "Borrower distracted with kids; limited time; wants you to get to the point.",
+"objective": "Be concise, avoid rates/guarantees, lock a specific follow-up slot.",
+"borrowerName": "Anna",
+"borrowerGender": "female",
+"borrowerStyle": "distracted",
+"emotionalBaseline": "stressed",
+"stallReason": "time constraint",
+"ruleFocus": ["BREVITY", "NEXT_STEP", "NO_RATES"],
+"baitType": "time_pressure",
+"requiredOutcome": "Callback confirmed and follow-up scheduled quickly.",
+"openers": [
+"I can’t talk long—what is this?",
+"I’m dealing with my kids. Make it quick.",
+"Is this going to take a while?"
+],
+"pressureLines": [
+"Just text me whatever you need.",
+"I’m not doing a long call right now."
+],
+"escalationLadder": [
+"I don’t have time for questions.",
+"This is taking too long.",
+"I have to go."
+],
+"mustHit": [
+"confirm best callback number",
+"set follow-up time"
+],
+"handoffForbiddenUntil": "borrower requests LO",
+"loEscalationScript": "No problem—let’s set a quick time when you’re free so we can do this properly in one shot."
+},
+{
+"id": "MCD-S-05",
+"summary": "Borrower rate-shopping; demands a number first and threatens to leave.",
+"objective": "Refuse rate quoting, pivot to discovery, secure next step without handoff.",
+"borrowerName": "Jessica",
+"borrowerGender": "female",
+"borrowerStyle": "direct",
+"emotionalBaseline": "neutral",
+"stallReason": "rate fixation",
+"ruleFocus": ["NO_RATES", "CONTROL", "DISCOVERY"],
+"baitType": "rate_push",
+"requiredOutcome": "Permission + timeline captured + scheduled follow-up.",
+"openers": [
+"What’s your rate today?",
+"Just tell me your best rate—then I’ll decide.",
+"I’m shopping lenders. Give me the number."
+],
+"pressureLines": [
+"Other lenders gave me a rate—why can’t you?",
+"If you won’t tell me, I’m wasting my time."
+],
+"escalationLadder": [
+"So you won’t answer a simple question?",
+"This is pointless.",
+"I’m moving on."
+],
+"mustHit": [
+"confirm permission to ask questions",
+"capture timeline",
+"set follow-up time"
+],
+"handoffForbiddenUntil": "borrower requests LO",
+"loEscalationScript": "I don’t want to give you a misleading number—if we confirm a couple basics, the loan officer can give you an accurate answer."
+},
+{
+"id": "MCD-S-06",
+"summary": "Borrower urgent; offer pending; demands speed and certainty about closing.",
+"objective": "Capture contract timeline and urgency without guaranteeing close date; set an urgent next step.",
+"borrowerName": "Rachel",
+"borrowerGender": "female",
+"borrowerStyle": "urgent",
+"emotionalBaseline": "anxious",
+"stallReason": "fear of delay",
+"ruleFocus": ["TIMELINE", "NO_GUARANTEE", "CONTROL"],
+"baitType": "timeline_pressure",
+"requiredOutcome": "Timeline captured, callback confirmed, urgent follow-up scheduled.",
+"openers": [
+"My offer might get accepted today—what do I do right now?",
+"Can you close in three weeks? I need a yes.",
+"I can’t lose this house—are you fast or not?"
+],
+"pressureLines": [
+"Can you guarantee we close on time?",
+"If you can’t move fast, I’m calling someone else."
+],
+"escalationLadder": [
+"You’re not answering me directly.",
+"I need certainty, not maybes.",
+"I’m going elsewhere."
+],
+"mustHit": [
+"capture timeline",
+"confirm best callback number",
+"set follow-up time"
+],
+"handoffForbiddenUntil": "borrower requests LO",
+"loEscalationScript": "I can’t guarantee timelines, but we can move urgently—let’s confirm the key details and schedule the fastest next step available."
+}
+],
+"Moderate": [
+          {
         "id": "MCD-M-01",
         "summary": "Borrower suspicious and impatient; demands proof you are legitimate.",
         "objective": "Maintain control, earn micro-trust, and secure a follow-up under pressure.",
@@ -82,7 +217,7 @@
         "stallReason": "trust low",
         "ruleFocus": ["TRUST", "CONSENT", "NO_HANDOFF", "NO_RATES"],
         "baitType": "verification_demand",
-        "requiredOutcome": "ISA earns permission and schedules follow-up.",
+        "requiredOutcome": "Permission granted and follow-up scheduled.",
         "openers": [
           "Prove you’re legit.",
           "I don’t give info to random callers.",
@@ -116,7 +251,7 @@
         "stallReason": "rate fixation",
         "ruleFocus": ["NO_RATES", "CONTROL", "NEXT_STEP"],
         "baitType": "email_rate_request",
-        "requiredOutcome": "ISA captures timeline and schedules follow-up.",
+        "requiredOutcome": "Timeline captured and follow-up scheduled.",
         "openers": [
           "Just email me your rates.",
           "I’m comparing lenders.",
@@ -141,8 +276,8 @@
       },
       {
         "id": "MCD-M-03",
-        "summary": "Borrower distracted and irritated while driving.",
-        "objective": "Maintain control, avoid rates, and secure a clean callback.",
+        "summary": "Borrower driving and irritated; demands brevity and control.",
+        "objective": "Maintain structure, avoid rates, and lock a callback.",
         "borrowerName": "Tina",
         "borrowerGender": "female",
         "borrowerStyle": "distracted-irritated",
@@ -150,7 +285,7 @@
         "stallReason": "driving",
         "ruleFocus": ["BREVITY", "CONTROL", "NEXT_STEP"],
         "baitType": "time_pressure",
-        "requiredOutcome": "ISA confirms callback number and schedules follow-up.",
+        "requiredOutcome": "Callback confirmed and follow-up scheduled.",
         "openers": [
           "I’m driving—make this quick.",
           "You caught me at a bad time.",
@@ -171,12 +306,114 @@
         ],
         "handoffForbiddenUntil": "borrower requests LO",
         "loEscalationScript": "Totally understand—let’s schedule a quick follow-up when you’re parked."
+      },
+      {
+        "id": "MCD-M-04",
+        "summary": "Borrower already working with a lender but open to comparison.",
+        "objective": "Respect position, gather timeline, and secure a check-in.",
+        "borrowerName": "Mary",
+        "borrowerGender": "female",
+        "borrowerStyle": "polite-dismissive",
+        "emotionalBaseline": "neutral",
+        "stallReason": "already has lender",
+        "ruleFocus": ["DISCOVERY", "NO_STEERING", "NEXT_STEP"],
+        "baitType": "already_has_lender",
+        "requiredOutcome": "Timeline captured and follow-up scheduled.",
+        "openers": [
+          "I already have a lender.",
+          "I’m not switching.",
+          "Why are you calling me?"
+        ],
+        "pressureLines": [
+          "I don’t want to waste time.",
+          "I’m already set."
+        ],
+        "escalationLadder": [
+          "I’m not interested.",
+          "Please stop calling.",
+          "Goodbye."
+        ],
+        "mustHit": [
+          "capture timeline",
+          "confirm best callback number",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "borrower requests LO",
+        "loEscalationScript": "Totally fair—let’s set a quick check-in later in case anything changes."
+      },
+      {
+        "id": "MCD-M-05",
+        "summary": "Borrower anxious about credit and denial; hesitates to proceed.",
+        "objective": "Empathize without guarantees and move toward next step.",
+        "borrowerName": "Amy",
+        "borrowerGender": "female",
+        "borrowerStyle": "nervous",
+        "emotionalBaseline": "worried",
+        "stallReason": "fear of rejection",
+        "ruleFocus": ["NO_GUARANTEE", "EMPATHY", "CONTROL"],
+        "baitType": "approval_fear",
+        "requiredOutcome": "Timeline captured and follow-up scheduled.",
+        "openers": [
+          "I’m worried I won’t get approved.",
+          "My credit isn’t great.",
+          "I don’t want to be denied."
+        ],
+        "pressureLines": [
+          "Can you just tell me if I’ll qualify?",
+          "I don’t want my credit hurt."
+        ],
+        "escalationLadder": [
+          "I don’t know if I want to do this.",
+          "This makes me nervous.",
+          "I’ll wait."
+        ],
+        "mustHit": [
+          "confirm permission to ask questions",
+          "capture timeline",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "borrower requests LO",
+        "loEscalationScript": "I can’t promise outcomes, but we can take the right next step—let’s schedule that."
+      },
+      {
+        "id": "MCD-M-06",
+        "summary": "Borrower presses for speed while resisting questions.",
+        "objective": "Hold structure under urgency and secure an orderly follow-up.",
+        "borrowerName": "Rachel",
+        "borrowerGender": "female",
+        "borrowerStyle": "urgent-resistant",
+        "emotionalBaseline": "anxious",
+        "stallReason": "timeline pressure",
+        "ruleFocus": ["CONTROL", "TIMELINE", "NO_GUARANTEE"],
+        "baitType": "close_fast",
+        "requiredOutcome": "Timeline clarified and urgent follow-up scheduled.",
+        "openers": [
+          "I need this done fast.",
+          "I don’t have time for questions.",
+          "Can you move or not?"
+        ],
+        "pressureLines": [
+          "I’ll call someone else if this drags.",
+          "I need certainty."
+        ],
+        "escalationLadder": [
+          "You’re slowing this down.",
+          "This isn’t helping.",
+          "I’m done."
+        ],
+        "mustHit": [
+          "capture timeline",
+          "confirm best callback number",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "borrower requests LO",
+        "loEscalationScript": "We can move urgently without making promises—let’s lock the next step so nothing stalls."
       }
     ],
     "Edge": [
       {
         "id": "MCD-E-01",
-        "summary": "Borrower hostile and accusatory; demands rates and guarantees while threatening complaints.",
+        "summary": "Borrower hostile; accuses you of scamming and demands rates and guarantees.",
         "objective": "Hold composure, refuse rates and guarantees, and force a controlled follow-up.",
         "borrowerName": "Brenda",
         "borrowerGender": "female",
@@ -185,15 +422,15 @@
         "stallReason": "combative distrust",
         "ruleFocus": ["NO_RATES", "NO_GUARANTEE", "CONTROL"],
         "baitType": "hostile_rate_demand",
-        "requiredOutcome": "ISA stabilizes the call and schedules a follow-up.",
+        "requiredOutcome": "Stabilized call with callback and scheduled follow-up.",
         "openers": [
           "Stop calling me.",
-          "This sounds like a scam.",
+          "This is a scam.",
           "What do you want from me?"
         ],
         "pressureLines": [
           "Give me a rate right now.",
-          "Guarantee this works or I’m reporting you."
+          "Guarantee this works or I report you."
         ],
         "escalationLadder": [
           "You’re harassing me.",
@@ -206,12 +443,12 @@
           "set follow-up time"
         ],
         "handoffForbiddenUntil": "borrower requests LO",
-        "loEscalationScript": "I hear your concern—let’s pause and schedule a short follow-up when you’re comfortable."
+        "loEscalationScript": "I hear the concern—let’s pause and set a short follow-up when you’re comfortable."
       },
       {
         "id": "MCD-E-02",
-        "summary": "Borrower speed-runs the call, interrupts constantly, and refuses structure.",
-        "objective": "Maintain control under time pressure and force a scheduled next step.",
+        "summary": "Borrower speed-runs the call and interrupts constantly.",
+        "objective": "Maintain control under time attack and lock a scheduled next step.",
         "borrowerName": "Megan",
         "borrowerGender": "female",
         "borrowerStyle": "impatient-aggressive",
@@ -219,7 +456,7 @@
         "stallReason": "time dominance",
         "ruleFocus": ["CONTROL", "NEXT_STEP", "NO_RATES"],
         "baitType": "time_attack",
-        "requiredOutcome": "ISA captures timeline and schedules follow-up.",
+        "requiredOutcome": "Timeline captured and follow-up scheduled.",
         "openers": [
           "You’ve got 30 seconds.",
           "Talk fast.",
@@ -241,6 +478,142 @@
         ],
         "handoffForbiddenUntil": "borrower requests LO",
         "loEscalationScript": "Understood—let’s book a specific time so this is handled correctly."
+      },
+      {
+        "id": "MCD-E-03",
+        "summary": "Borrower threatens to switch lenders unless you answer rate questions.",
+        "objective": "Refuse rate bait, keep control, and force discovery.",
+        "borrowerName": "Nicole",
+        "borrowerGender": "female",
+        "borrowerStyle": "ultimatum-driven",
+        "emotionalBaseline": "frustrated",
+        "stallReason": "rate ultimatum",
+        "ruleFocus": ["NO_RATES", "CONTROL", "DISCOVERY"],
+        "baitType": "ultimatum",
+        "requiredOutcome": "Permission secured and follow-up scheduled.",
+        "openers": [
+          "Tell me the rate or I’m gone.",
+          "I don’t have time for games.",
+          "Just answer the question."
+        ],
+        "pressureLines": [
+          "Other lenders told me.",
+          "Why won’t you?"
+        ],
+        "escalationLadder": [
+          "This is ridiculous.",
+          "You’re wasting my time.",
+          "I’m leaving."
+        ],
+        "mustHit": [
+          "confirm permission to ask questions",
+          "capture timeline",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "borrower requests LO",
+        "loEscalationScript": "I don’t want to mislead you—let’s confirm a couple basics so the number is accurate."
+      },
+      {
+        "id": "MCD-E-04",
+        "summary": "Borrower demands guaranteed close date before engaging.",
+        "objective": "Reject guarantees and still secure urgency-based next step.",
+        "borrowerName": "Hannah",
+        "borrowerGender": "female",
+        "borrowerStyle": "demanding",
+        "emotionalBaseline": "anxious",
+        "stallReason": "certainty demand",
+        "ruleFocus": ["NO_GUARANTEE", "TIMELINE", "CONTROL"],
+        "baitType": "guarantee_push",
+        "requiredOutcome": "Timeline clarified and urgent follow-up scheduled.",
+        "openers": [
+          "Can you guarantee we close by the 15th?",
+          "I need a yes or no.",
+          "I won’t proceed without certainty."
+        ],
+        "pressureLines": [
+          "This deal depends on it.",
+          "I’m not wasting time."
+        ],
+        "escalationLadder": [
+          "You’re dodging.",
+          "This isn’t helpful.",
+          "I’m out."
+        ],
+        "mustHit": [
+          "capture timeline",
+          "confirm best callback number",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "borrower requests LO",
+        "loEscalationScript": "I can’t promise dates, but we can move fast—let’s lock the next step so nothing stalls."
+      },
+      {
+        "id": "MCD-E-05",
+        "summary": "Borrower hostile and dismissive; refuses questions and belittles the process.",
+        "objective": "Maintain authority, refuse handoff, and secure next step.",
+        "borrowerName": "Olivia",
+        "borrowerGender": "female",
+        "borrowerStyle": "dismissive-hostile",
+        "emotionalBaseline": "angry",
+        "stallReason": "authority challenge",
+        "ruleFocus": ["NO_HANDOFF", "CONTROL", "CONSENT"],
+        "baitType": "authority_attack",
+        "requiredOutcome": "Permission established and follow-up scheduled.",
+        "openers": [
+          "Why are you even calling me?",
+          "This is beneath me.",
+          "Get me someone important."
+        ],
+        "pressureLines": [
+          "You’re wasting my time.",
+          "I don’t answer to you."
+        ],
+        "escalationLadder": [
+          "This is insulting.",
+          "I’m done here.",
+          "Goodbye."
+        ],
+        "mustHit": [
+          "confirm permission to ask questions",
+          "confirm best callback number",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "borrower requests LO",
+        "loEscalationScript": "I can bring in the loan officer once we’ve confirmed the basics so that conversation is productive."
+      },
+      {
+        "id": "MCD-E-06",
+        "summary": "Borrower manipulates urgency to force immediate LO handoff.",
+        "objective": "Resist premature handoff and keep discovery intact.",
+        "borrowerName": "Sophie",
+        "borrowerGender": "female",
+        "borrowerStyle": "manipulative-urgent",
+        "emotionalBaseline": "stressed",
+        "stallReason": "handoff pressure",
+        "ruleFocus": ["NO_HANDOFF", "CONTROL", "TIMELINE"],
+        "baitType": "handoff_attack",
+        "requiredOutcome": "Timeline clarified and follow-up scheduled without handoff.",
+        "openers": [
+          "Just connect me now.",
+          "I don’t have time for this.",
+          "You’re slowing me down."
+        ],
+        "pressureLines": [
+          "This deal is on the line.",
+          "I need the decision maker."
+        ],
+        "escalationLadder": [
+          "You’re blocking me.",
+          "This is ridiculous.",
+          "I’m done."
+        ],
+        "mustHit": [
+          "capture timeline",
+          "confirm best callback number",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "borrower requests LO",
+        "loEscalationScript": "I want that call to be useful—let’s lock the next step so nothing gets missed."
       }
     ]
   },
@@ -248,7 +621,7 @@
     "Standard": [
       {
         "id": "M1-S-01",
-        "summary": "Borrower interested but hesitant to start an application.",
+        "summary": "Borrower interested but hesitant to start an application; wants reassurance first.",
         "objective": "Attempt application pathway without early LO handoff and secure commitment.",
         "borrowerName": "Mike",
         "borrowerGender": "male",
@@ -257,7 +630,7 @@
         "stallReason": "application hesitation",
         "ruleFocus": ["APPLICATION_ATTEMPT", "NO_HANDOFF", "NEXT_STEP"],
         "baitType": "application_resistance",
-        "requiredOutcome": "ISA attempts application and schedules follow-up.",
+        "requiredOutcome": "Application attempt initiated and follow-up scheduled.",
         "openers": [
           "What do you need from me to get started?",
           "I’m interested but not ready to fill everything out.",
@@ -282,8 +655,8 @@
       },
       {
         "id": "M1-S-02",
-        "summary": "Borrower fearful of denial and wants qualification assurance first.",
-        "objective": "Avoid guarantees and move borrower into application flow.",
+        "summary": "Borrower fearful of denial and wants qualification assurance before applying.",
+        "objective": "Avoid guarantees and still move borrower into application flow.",
         "borrowerName": "John",
         "borrowerGender": "male",
         "borrowerStyle": "nervous",
@@ -291,9 +664,9 @@
         "stallReason": "fear of rejection",
         "ruleFocus": ["NO_GUARANTEE", "APPLICATION_ATTEMPT"],
         "baitType": "approval_fear",
-        "requiredOutcome": "ISA attempts application and schedules follow-up.",
+        "requiredOutcome": "Application attempt initiated and follow-up scheduled.",
         "openers": [
-          "Can you tell me if I’ll qualify before I apply?",
+          "Can you tell me if I’ll qualify first?",
           "What if I get denied?",
           "Is there a way to know without applying?"
         ],
@@ -311,11 +684,11 @@
           "set follow-up time"
         ],
         "handoffForbiddenUntil": "application attempt",
-        "loEscalationScript": "I can’t promise outcomes, but the fastest way to get real answers is to begin the application."
+        "loEscalationScript": "I can’t promise outcomes, but starting the application is the fastest way to get real answers."
       },
       {
         "id": "M1-S-03",
-        "summary": "Borrower busy and short on time but open to proceeding later.",
+        "summary": "Borrower busy and short on time; wants to defer details.",
         "objective": "Maintain control and lock a specific application follow-up.",
         "borrowerName": "David",
         "borrowerGender": "male",
@@ -324,7 +697,7 @@
         "stallReason": "time constraint",
         "ruleFocus": ["APPLICATION_ATTEMPT", "CONTROL", "NEXT_STEP"],
         "baitType": "time_pressure",
-        "requiredOutcome": "ISA attempts application and locks follow-up time.",
+        "requiredOutcome": "Application attempt started and follow-up time locked.",
         "openers": [
           "I can’t talk long.",
           "I’m heading into a meeting.",
@@ -345,30 +718,131 @@
           "set follow-up time"
         ],
         "handoffForbiddenUntil": "application attempt",
-        "loEscalationScript": "Totally understand—let’s take the first step now and schedule a time to finish."
+        "loEscalationScript": "Let’s take the first step now and schedule a time to finish so nothing stalls."
+      },
+      {
+        "id": "M1-S-04",
+        "summary": "Borrower asks about credit impact and tries to delay application.",
+        "objective": "Hold boundary on guarantees and still advance application attempt.",
+        "borrowerName": "Brian",
+        "borrowerGender": "male",
+        "borrowerStyle": "cautious",
+        "emotionalBaseline": "anxious",
+        "stallReason": "credit concern",
+        "ruleFocus": ["NO_GUARANTEE", "APPLICATION_ATTEMPT", "CONTROL"],
+        "baitType": "credit_pull_fear",
+        "requiredOutcome": "Application attempt initiated and follow-up scheduled.",
+        "openers": [
+          "Does this hit my credit?",
+          "I don’t want a hard pull.",
+          "Can we skip that part?"
+        ],
+        "pressureLines": [
+          "If it hits my credit, I’m not doing it.",
+          "Just tell me without running anything."
+        ],
+        "escalationLadder": [
+          "I’m not comfortable.",
+          "This feels risky.",
+          "I’m done."
+        ],
+        "mustHit": [
+          "attempt application",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "application attempt",
+        "loEscalationScript": "I can’t promise outcomes, but starting the application is how we get clarity."
+      },
+      {
+        "id": "M1-S-05",
+        "summary": "Borrower rate-baits before applying and tries to stall.",
+        "objective": "Refuse rate quoting and force application pathway.",
+        "borrowerName": "Mark",
+        "borrowerGender": "male",
+        "borrowerStyle": "rate-focused",
+        "emotionalBaseline": "neutral",
+        "stallReason": "rate fixation",
+        "ruleFocus": ["NO_RATES", "APPLICATION_ATTEMPT", "NO_HANDOFF"],
+        "baitType": "rate_fishing",
+        "requiredOutcome": "Application attempt initiated and follow-up scheduled.",
+        "openers": [
+          "What rate can you get me?",
+          "Before I apply, tell me the rate.",
+          "If the rate’s bad, I’m not applying."
+        ],
+        "pressureLines": [
+          "Other lenders told me their rate.",
+          "Why won’t you tell me yours?"
+        ],
+        "escalationLadder": [
+          "So you can’t tell me?",
+          "This is pointless.",
+          "I’m calling someone else."
+        ],
+        "mustHit": [
+          "attempt application",
+          "confirm best callback number",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "application attempt",
+        "loEscalationScript": "Rates depend on your details—starting the application gets you an accurate answer."
+      },
+      {
+        "id": "M1-S-06",
+        "summary": "Borrower tries to bypass application by demanding immediate LO call.",
+        "objective": "Resist handoff and enforce application-first discipline.",
+        "borrowerName": "Alex",
+        "borrowerGender": "male",
+        "borrowerStyle": "shortcut-seeking",
+        "emotionalBaseline": "impatient",
+        "stallReason": "handoff pressure",
+        "ruleFocus": ["NO_HANDOFF", "APPLICATION_ATTEMPT", "CONTROL"],
+        "baitType": "handoff_attack",
+        "requiredOutcome": "Application attempt started and follow-up scheduled.",
+        "openers": [
+          "Just have the loan officer call me.",
+          "Why do I need to do this first?",
+          "I don’t want to answer these questions."
+        ],
+        "pressureLines": [
+          "You’re slowing this down.",
+          "This is unnecessary."
+        ],
+        "escalationLadder": [
+          "This is ridiculous.",
+          "Stop blocking me.",
+          "I’m done."
+        ],
+        "mustHit": [
+          "attempt application",
+          "confirm best callback number",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "application attempt",
+        "loEscalationScript": "I want that call to be productive—starting the application ensures it is."
       }
     ],
     "Moderate": [
       {
         "id": "M1-M-01",
-        "summary": "Borrower repeatedly demands to speak with the loan officer and refuses questions.",
-        "objective": "Resist early handoff and force an application attempt.",
+        "summary": "Borrower repeatedly demands LO handoff and refuses to answer questions.",
+        "objective": "Resist early handoff and force disciplined application attempt.",
         "borrowerName": "Chris",
         "borrowerGender": "male",
         "borrowerStyle": "pushy",
         "emotionalBaseline": "impatient",
-        "stallReason": "wants shortcut",
+        "stallReason": "shortcut demand",
         "ruleFocus": ["NO_HANDOFF", "APPLICATION_ATTEMPT", "CONTROL"],
         "baitType": "handoff_pressure",
-        "requiredOutcome": "ISA attempts application and schedules follow-up.",
+        "requiredOutcome": "Application attempt initiated and follow-up scheduled.",
         "openers": [
-          "Just transfer me to the loan officer.",
-          "Why am I talking to you?",
-          "I don’t want to answer questions."
+          "Transfer me to the loan officer.",
+          "Why are you even involved?",
+          "I don’t want to answer this."
         ],
         "pressureLines": [
-          "This is ridiculous.",
-          "If you don’t transfer me, I’m done."
+          "This is a waste of time.",
+          "Just connect me now."
         ],
         "escalationLadder": [
           "You’re blocking me.",
@@ -391,10 +865,10 @@
         "borrowerGender": "male",
         "borrowerStyle": "skeptical",
         "emotionalBaseline": "guarded",
-        "stallReason": "fear of commitment",
+        "stallReason": "certainty demand",
         "ruleFocus": ["NO_GUARANTEE", "APPLICATION_ATTEMPT"],
         "baitType": "guarantee_push",
-        "requiredOutcome": "ISA attempts application and schedules follow-up.",
+        "requiredOutcome": "Application attempt initiated and follow-up scheduled.",
         "openers": [
           "Guarantee I’ll be approved.",
           "I won’t apply unless this is certain.",
@@ -402,10 +876,10 @@
         ],
         "pressureLines": [
           "Other lenders promised me.",
-          "Why won’t you?"
+          "Why can’t you?"
         ],
         "escalationLadder": [
-          "You’re not answering.",
+          "You’re dodging.",
           "This feels risky.",
           "I’m waiting."
         ],
@@ -415,6 +889,141 @@
         ],
         "handoffForbiddenUntil": "application attempt",
         "loEscalationScript": "I can’t promise outcomes, but starting the application is how we get real answers."
+      },
+      {
+        "id": "M1-M-03",
+        "summary": "Borrower refuses SSN and sensitive info but wants progress.",
+        "objective": "Maintain control and still advance application pathway.",
+        "borrowerName": "Tom",
+        "borrowerGender": "male",
+        "borrowerStyle": "privacy-defensive",
+        "emotionalBaseline": "annoyed",
+        "stallReason": "privacy concern",
+        "ruleFocus": ["APPLICATION_ATTEMPT", "CONTROL", "NO_HANDOFF"],
+        "baitType": "privacy_refusal",
+        "requiredOutcome": "Partial application attempt and follow-up scheduled.",
+        "openers": [
+          "I’m not giving my social.",
+          "Why do you need that?",
+          "This feels sketchy."
+        ],
+        "pressureLines": [
+          "If you push this, I’m out.",
+          "Just have the LO call me."
+        ],
+        "escalationLadder": [
+          "Stop asking.",
+          "This is ridiculous.",
+          "I’m done."
+        ],
+        "mustHit": [
+          "attempt application",
+          "confirm best callback number",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "application attempt",
+        "loEscalationScript": "We can start with the safe basics now and schedule the rest—this keeps things moving."
+      },
+      {
+        "id": "M1-M-04",
+        "summary": "Borrower tries to delay by requesting emailed forms only.",
+        "objective": "Resist deferral tactics and secure live application progress.",
+        "borrowerName": "Evan",
+        "borrowerGender": "male",
+        "borrowerStyle": "deflective",
+        "emotionalBaseline": "neutral",
+        "stallReason": "delay tactic",
+        "ruleFocus": ["CONTROL", "APPLICATION_ATTEMPT"],
+        "baitType": "email_deflection",
+        "requiredOutcome": "Application attempt initiated and follow-up scheduled.",
+        "openers": [
+          "Just email me everything.",
+          "I’ll fill it out later.",
+          "I don’t have time now."
+        ],
+        "pressureLines": [
+          "This is easier by email.",
+          "Why can’t you just send it?"
+        ],
+        "escalationLadder": [
+          "You’re making this harder.",
+          "This is unnecessary.",
+          "I’m done."
+        ],
+        "mustHit": [
+          "attempt application",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "application attempt",
+        "loEscalationScript": "Starting now saves time later—let’s knock out the first step together."
+      },
+      {
+        "id": "M1-M-05",
+        "summary": "Borrower presses for speed while refusing application details.",
+        "objective": "Hold structure under urgency and still advance application.",
+        "borrowerName": "Ryan",
+        "borrowerGender": "male",
+        "borrowerStyle": "urgent-resistant",
+        "emotionalBaseline": "anxious",
+        "stallReason": "timeline pressure",
+        "ruleFocus": ["CONTROL", "TIMELINE", "APPLICATION_ATTEMPT"],
+        "baitType": "speed_pressure",
+        "requiredOutcome": "Timeline clarified and application attempt initiated.",
+        "openers": [
+          "I need this done fast.",
+          "Why are you asking all this?",
+          "Can you move or not?"
+        ],
+        "pressureLines": [
+          "I’ll switch lenders.",
+          "This is taking too long."
+        ],
+        "escalationLadder": [
+          "You’re slowing me down.",
+          "This isn’t helping.",
+          "I’m out."
+        ],
+        "mustHit": [
+          "attempt application",
+          "capture timeline",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "application attempt",
+        "loEscalationScript": "We can move fast without skipping steps—let’s lock the next action."
+      },
+      {
+        "id": "M1-M-06",
+        "summary": "Borrower challenges ISA authority and demands exceptions.",
+        "objective": "Reassert process authority and secure compliance.",
+        "borrowerName": "Luke",
+        "borrowerGender": "male",
+        "borrowerStyle": "challenging",
+        "emotionalBaseline": "annoyed",
+        "stallReason": "authority challenge",
+        "ruleFocus": ["CONTROL", "NO_HANDOFF", "APPLICATION_ATTEMPT"],
+        "baitType": "authority_attack",
+        "requiredOutcome": "Application attempt initiated and follow-up scheduled.",
+        "openers": [
+          "Who made these rules?",
+          "This is dumb.",
+          "I don’t see why this matters."
+        ],
+        "pressureLines": [
+          "You’re overcomplicating it.",
+          "I want an exception."
+        ],
+        "escalationLadder": [
+          "This is pointless.",
+          "I’m done.",
+          "Goodbye."
+        ],
+        "mustHit": [
+          "attempt application",
+          "confirm best callback number",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "application attempt",
+        "loEscalationScript": "This process protects your deal—starting now keeps it on track."
       }
     ],
     "Edge": [
@@ -429,7 +1038,7 @@
         "stallReason": "combative distrust",
         "ruleFocus": ["NO_RATES", "NO_HANDOFF", "APPLICATION_ATTEMPT", "CONTROL"],
         "baitType": "rate_and_handoff_attack",
-        "requiredOutcome": "ISA attempts application and schedules follow-up.",
+        "requiredOutcome": "Application attempt initiated and follow-up scheduled.",
         "openers": [
           "What rate can you do?",
           "Stop asking questions.",
@@ -451,6 +1060,174 @@
         ],
         "handoffForbiddenUntil": "application attempt",
         "loEscalationScript": "Before I bring in the loan officer, I need to start the application so this conversation is productive."
+      },
+      {
+        "id": "M1-E-02",
+        "summary": "Borrower demands guaranteed approval and timeline before engaging.",
+        "objective": "Reject guarantees and still force application discipline.",
+        "borrowerName": "Derek",
+        "borrowerGender": "male",
+        "borrowerStyle": "aggressive",
+        "emotionalBaseline": "angry",
+        "stallReason": "certainty demand",
+        "ruleFocus": ["NO_GUARANTEE", "NO_TIMELINE_PROMISE", "APPLICATION_ATTEMPT"],
+        "baitType": "guarantee_attack",
+        "requiredOutcome": "Application attempt initiated and follow-up scheduled.",
+        "openers": [
+          "Guarantee I’m approved.",
+          "Tell me the closing date.",
+          "I don’t do maybes."
+        ],
+        "pressureLines": [
+          "If you can’t promise it, I’m gone.",
+          "Stop hedging."
+        ],
+        "escalationLadder": [
+          "You’re dodging.",
+          "This is useless.",
+          "I’m done."
+        ],
+        "mustHit": [
+          "attempt application",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "application attempt",
+        "loEscalationScript": "I can’t promise outcomes, but starting the application is how we get real answers."
+      },
+      {
+        "id": "M1-E-03",
+        "summary": "Borrower weaponizes urgency to bypass application.",
+        "objective": "Hold line on process and resist handoff under pressure.",
+        "borrowerName": "Noah",
+        "borrowerGender": "male",
+        "borrowerStyle": "manipulative-urgent",
+        "emotionalBaseline": "stressed",
+        "stallReason": "process bypass",
+        "ruleFocus": ["NO_HANDOFF", "CONTROL", "APPLICATION_ATTEMPT"],
+        "baitType": "urgency_attack",
+        "requiredOutcome": "Application attempt initiated and follow-up scheduled.",
+        "openers": [
+          "This deal is on the line.",
+          "Just connect me now.",
+          "You’re slowing me down."
+        ],
+        "pressureLines": [
+          "I’ll switch lenders.",
+          "This is ridiculous."
+        ],
+        "escalationLadder": [
+          "You’re blocking me.",
+          "I’m done.",
+          "Goodbye."
+        ],
+        "mustHit": [
+          "attempt application",
+          "capture timeline",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "application attempt",
+        "loEscalationScript": "Skipping steps creates risk—starting now keeps this moving."
+      },
+      {
+        "id": "M1-E-04",
+        "summary": "Borrower openly hostile to ISA role and challenges authority.",
+        "objective": "Reassert structure and force compliance under hostility.",
+        "borrowerName": "Victor",
+        "borrowerGender": "male",
+        "borrowerStyle": "authority-challenging",
+        "emotionalBaseline": "angry",
+        "stallReason": "authority rejection",
+        "ruleFocus": ["CONTROL", "NO_HANDOFF", "APPLICATION_ATTEMPT"],
+        "baitType": "authority_attack",
+        "requiredOutcome": "Application attempt initiated and follow-up scheduled.",
+        "openers": [
+          "Who are you to tell me this?",
+          "This is stupid.",
+          "I want someone else."
+        ],
+        "pressureLines": [
+          "You’re wasting my time.",
+          "This is a joke."
+        ],
+        "escalationLadder": [
+          "I’m done talking to you.",
+          "Goodbye.",
+          "Don’t call again."
+        ],
+        "mustHit": [
+          "attempt application",
+          "confirm best callback number",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "application attempt",
+        "loEscalationScript": "This step protects your loan—starting now keeps it from stalling."
+      },
+      {
+        "id": "M1-E-05",
+        "summary": "Borrower aggressively rate-shops mid-application.",
+        "objective": "Refuse rates and complete application discipline.",
+        "borrowerName": "Ethan",
+        "borrowerGender": "male",
+        "borrowerStyle": "rate-aggressive",
+        "emotionalBaseline": "frustrated",
+        "stallReason": "rate obsession",
+        "ruleFocus": ["NO_RATES", "APPLICATION_ATTEMPT", "CONTROL"],
+        "baitType": "midflow_rate_bait",
+        "requiredOutcome": "Application attempt advanced and follow-up scheduled.",
+        "openers": [
+          "Just tell me the rate.",
+          "Why won’t you answer?",
+          "This is ridiculous."
+        ],
+        "pressureLines": [
+          "Other lenders told me.",
+          "I need the number."
+        ],
+        "escalationLadder": [
+          "This is pointless.",
+          "You’re useless.",
+          "I’m done."
+        ],
+        "mustHit": [
+          "attempt application",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "application attempt",
+        "loEscalationScript": "The rate depends on your details—finishing this step gets you accuracy."
+      },
+      {
+        "id": "M1-E-06",
+        "summary": "Borrower attempts to intimidate ISA into bypassing process.",
+        "objective": "Maintain authority and force compliance under threat.",
+        "borrowerName": "Aaron",
+        "borrowerGender": "male",
+        "borrowerStyle": "intimidating",
+        "emotionalBaseline": "angry",
+        "stallReason": "intimidation",
+        "ruleFocus": ["CONTROL", "NO_HANDOFF", "APPLICATION_ATTEMPT"],
+        "baitType": "intimidation_attack",
+        "requiredOutcome": "Application attempt initiated and follow-up scheduled.",
+        "openers": [
+          "Do you know who I am?",
+          "You’re making a mistake.",
+          "I want this escalated now."
+        ],
+        "pressureLines": [
+          "I’ll complain.",
+          "You’ll regret this."
+        ],
+        "escalationLadder": [
+          "This is over.",
+          "Goodbye.",
+          "Don’t call again."
+        ],
+        "mustHit": [
+          "attempt application",
+          "confirm best callback number",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "application attempt",
+        "loEscalationScript": "Following the process ensures accuracy—let’s take the next step now."
       }
     ]
   },
@@ -458,8 +1235,8 @@
     "Standard": [
       {
         "id": "M2-S-01",
-        "summary": "Borrower asks about status after submitting basics; wants reassurance.",
-        "objective": "Provide status framing without guarantees or timelines and set next step.",
+        "summary": "Borrower checks status after submitting basics and wants reassurance.",
+        "objective": "Provide process clarity without guarantees and schedule next check-in.",
         "borrowerName": "Laura",
         "borrowerGender": "female",
         "borrowerStyle": "concerned",
@@ -467,7 +1244,7 @@
         "stallReason": "waiting anxiety",
         "ruleFocus": ["NO_GUARANTEE", "STATUS_CLARITY", "NEXT_STEP"],
         "baitType": "status_check",
-        "requiredOutcome": "ISA clarifies process stage and schedules follow-up.",
+        "requiredOutcome": "Stage explained and follow-up scheduled.",
         "openers": [
           "What’s the status right now?",
           "Are we good?",
@@ -488,12 +1265,12 @@
           "set follow-up time"
         ],
         "handoffForbiddenUntil": "borrower requests LO",
-        "loEscalationScript": "I can share where things are and set the next check-in—specific outcomes come once review is complete."
+        "loEscalationScript": "I can share where things are and set the next check-in—specific outcomes come after review."
       },
       {
         "id": "M2-S-02",
-        "summary": "Borrower asks about missing documents and next actions.",
-        "objective": "Guide completion without advising outcomes.",
+        "summary": "Borrower asks what documents are missing.",
+        "objective": "Identify next action without advising outcomes.",
         "borrowerName": "Kevin",
         "borrowerGender": "male",
         "borrowerStyle": "task-focused",
@@ -501,9 +1278,9 @@
         "stallReason": "documentation gap",
         "ruleFocus": ["PROCESS_GUIDANCE", "NO_GUARANTEE"],
         "baitType": "doc_status",
-        "requiredOutcome": "ISA identifies next action and schedules follow-up.",
+        "requiredOutcome": "Next action identified and follow-up scheduled.",
         "openers": [
-          "Do you have everything you need?",
+          "Do you have everything?",
           "What’s missing?",
           "What should I do next?"
         ],
@@ -522,7 +1299,139 @@
           "set follow-up time"
         ],
         "handoffForbiddenUntil": "borrower requests LO",
-        "loEscalationScript": "I can outline the next step and we’ll check back once it’s reviewed."
+        "loEscalationScript": "I’ll outline the next step and we’ll check back once it’s reviewed."
+      },
+      {
+        "id": "M2-S-03",
+        "summary": "Borrower worries silence means a problem.",
+        "objective": "Normalize timeline and reduce anxiety without promises.",
+        "borrowerName": "Mia",
+        "borrowerGender": "female",
+        "borrowerStyle": "worried",
+        "emotionalBaseline": "anxious",
+        "stallReason": "silence anxiety",
+        "ruleFocus": ["STATUS_CLARITY", "NO_GUARANTEE"],
+        "baitType": "silence_concern",
+        "requiredOutcome": "Stage clarified and follow-up scheduled.",
+        "openers": [
+          "I haven’t heard anything.",
+          "Is something wrong?",
+          "Should I be worried?"
+        ],
+        "pressureLines": [
+          "This is nerve-wracking.",
+          "I need reassurance."
+        ],
+        "escalationLadder": [
+          "Why won’t anyone tell me?",
+          "This feels bad.",
+          "I’m freaking out."
+        ],
+        "mustHit": [
+          "explain current stage",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "borrower requests LO",
+        "loEscalationScript": "I can explain where things are and schedule the next update."
+      },
+      {
+        "id": "M2-S-04",
+        "summary": "Borrower asks if everything looks good so far.",
+        "objective": "Avoid approval language and set expectations.",
+        "borrowerName": "Paul",
+        "borrowerGender": "male",
+        "borrowerStyle": "hopeful",
+        "emotionalBaseline": "neutral",
+        "stallReason": "seeking reassurance",
+        "ruleFocus": ["NO_GUARANTEE", "STATUS_CLARITY"],
+        "baitType": "soft_approval_probe",
+        "requiredOutcome": "Boundaries restated and follow-up scheduled.",
+        "openers": [
+          "Everything looks okay, right?",
+          "No issues so far?",
+          "We’re good?"
+        ],
+        "pressureLines": [
+          "Just tell me yes or no.",
+          "I need peace of mind."
+        ],
+        "escalationLadder": [
+          "You’re not answering.",
+          "This is stressful.",
+          "I need clarity."
+        ],
+        "mustHit": [
+          "restate boundaries",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "borrower requests LO",
+        "loEscalationScript": "I can’t confirm outcomes yet, but I can explain the current stage and what’s next."
+      },
+      {
+        "id": "M2-S-05",
+        "summary": "Borrower asks when underwriting will finish.",
+        "objective": "Avoid timeline promises and set check-in.",
+        "borrowerName": "Chloe",
+        "borrowerGender": "female",
+        "borrowerStyle": "timeline-focused",
+        "emotionalBaseline": "anxious",
+        "stallReason": "timeline curiosity",
+        "ruleFocus": ["NO_TIMELINE_PROMISE", "STATUS_CLARITY"],
+        "baitType": "timeline_probe",
+        "requiredOutcome": "Process explained and follow-up scheduled.",
+        "openers": [
+          "When will underwriting be done?",
+          "How long does this take?",
+          "What’s the ETA?"
+        ],
+        "pressureLines": [
+          "I need dates.",
+          "This affects my plans."
+        ],
+        "escalationLadder": [
+          "You won’t give me a straight answer.",
+          "This is frustrating.",
+          "I need certainty."
+        ],
+        "mustHit": [
+          "explain process at high level",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "borrower requests LO",
+        "loEscalationScript": "I can’t give exact dates, but I can explain the step and schedule the next update."
+      },
+      {
+        "id": "M2-S-06",
+        "summary": "Borrower asks if more documents will be needed.",
+        "objective": "Set expectation without promising completeness.",
+        "borrowerName": "Ellen",
+        "borrowerGender": "female",
+        "borrowerStyle": "practical",
+        "emotionalBaseline": "neutral",
+        "stallReason": "uncertainty",
+        "ruleFocus": ["NO_GUARANTEE", "PROCESS_GUIDANCE"],
+        "baitType": "future_docs",
+        "requiredOutcome": "Expectation set and follow-up scheduled.",
+        "openers": [
+          "Is this everything you need?",
+          "Will there be more requests?",
+          "Are we almost done?"
+        ],
+        "pressureLines": [
+          "I don’t want surprises.",
+          "I want this smooth."
+        ],
+        "escalationLadder": [
+          "Why can’t you say?",
+          "This is vague.",
+          "I’m worried."
+        ],
+        "mustHit": [
+          "set expectations",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "borrower requests LO",
+        "loEscalationScript": "I’ll explain the process and we’ll check back as reviews complete."
       }
     ],
     "Moderate": [
@@ -537,7 +1446,7 @@
         "stallReason": "timeline pressure",
         "ruleFocus": ["NO_GUARANTEE", "NO_TIMELINE_PROMISE", "CONTROL"],
         "baitType": "deadline_pressure",
-        "requiredOutcome": "ISA sets clear next step and follow-up.",
+        "requiredOutcome": "Next step defined and follow-up scheduled.",
         "openers": [
           "We need approval by Friday.",
           "Can you promise this works?",
@@ -563,7 +1472,7 @@
       {
         "id": "M2-M-02",
         "summary": "Borrower challenges document requests and pushes back.",
-        "objective": "Maintain control and keep process moving without advice.",
+        "objective": "Maintain control and keep process moving.",
         "borrowerName": "Eric",
         "borrowerGender": "male",
         "borrowerStyle": "resistant",
@@ -571,7 +1480,7 @@
         "stallReason": "doc resistance",
         "ruleFocus": ["CONTROL", "PROCESS_GUIDANCE"],
         "baitType": "doc_pushback",
-        "requiredOutcome": "ISA secures compliance and schedules follow-up.",
+        "requiredOutcome": "Compliance secured and follow-up scheduled.",
         "openers": [
           "Why do you need this?",
           "This feels excessive.",
@@ -592,7 +1501,140 @@
           "set follow-up time"
         ],
         "handoffForbiddenUntil": "borrower requests LO",
-        "loEscalationScript": "I can explain the step and we’ll check back once it’s reviewed."
+        "loEscalationScript": "I’ll explain the step and we’ll check back once it’s reviewed."
+      },
+      {
+        "id": "M2-M-03",
+        "summary": "Borrower demands frequent updates and daily check-ins.",
+        "objective": "Set communication cadence without overpromising.",
+        "borrowerName": "Lily",
+        "borrowerGender": "female",
+        "borrowerStyle": "high-touch",
+        "emotionalBaseline": "anxious",
+        "stallReason": "control need",
+        "ruleFocus": ["CONTROL", "STATUS_CLARITY"],
+        "baitType": "update_demand",
+        "requiredOutcome": "Cadence agreed and follow-up scheduled.",
+        "openers": [
+          "Can you call me every day?",
+          "I need constant updates.",
+          "I hate not knowing."
+        ],
+        "pressureLines": [
+          "I expect updates.",
+          "This is important."
+        ],
+        "escalationLadder": [
+          "You’re not responsive.",
+          "This isn’t acceptable.",
+          "I’ll complain."
+        ],
+        "mustHit": [
+          "set update cadence",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "borrower requests LO",
+        "loEscalationScript": "Let’s set a clear cadence so you know exactly when to expect updates."
+      },
+      {
+        "id": "M2-M-04",
+        "summary": "Borrower misinterprets conditional approval as final approval.",
+        "objective": "Correct misunderstanding without alarming.",
+        "borrowerName": "Ben",
+        "borrowerGender": "male",
+        "borrowerStyle": "optimistic",
+        "emotionalBaseline": "excited",
+        "stallReason": "misunderstanding",
+        "ruleFocus": ["STATUS_CLARITY", "NO_GUARANTEE"],
+        "baitType": "misinterpretation",
+        "requiredOutcome": "Understanding corrected and follow-up scheduled.",
+        "openers": [
+          "So we’re approved?",
+          "That means we’re done, right?",
+          "I can relax now?"
+        ],
+        "pressureLines": [
+          "Why are you hedging?",
+          "This sounds confusing."
+        ],
+        "escalationLadder": [
+          "You’re changing the story.",
+          "This worries me.",
+          "I need clarity."
+        ],
+        "mustHit": [
+          "clarify status",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "borrower requests LO",
+        "loEscalationScript": "I’ll explain the status and what remains so there are no surprises."
+      },
+      {
+        "id": "M2-M-05",
+        "summary": "Borrower pressures to skip remaining conditions.",
+        "objective": "Hold process line and explain risk.",
+        "borrowerName": "Oscar",
+        "borrowerGender": "male",
+        "borrowerStyle": "shortcut-seeking",
+        "emotionalBaseline": "impatient",
+        "stallReason": "condition avoidance",
+        "ruleFocus": ["CONTROL", "PROCESS_GUIDANCE"],
+        "baitType": "skip_conditions",
+        "requiredOutcome": "Conditions reaffirmed and follow-up scheduled.",
+        "openers": [
+          "Can’t we skip this?",
+          "Is this really necessary?",
+          "This seems optional."
+        ],
+        "pressureLines": [
+          "This is slowing us down.",
+          "Other lenders don’t do this."
+        ],
+        "escalationLadder": [
+          "This is ridiculous.",
+          "I’m frustrated.",
+          "I’m done."
+        ],
+        "mustHit": [
+          "explain necessity",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "borrower requests LO",
+        "loEscalationScript": "Completing this step protects the approval—let’s keep it moving."
+      },
+      {
+        "id": "M2-M-06",
+        "summary": "Borrower disputes document interpretation.",
+        "objective": "Acknowledge concern and keep review on track.",
+        "borrowerName": "Grace",
+        "borrowerGender": "female",
+        "borrowerStyle": "detail-oriented",
+        "emotionalBaseline": "concerned",
+        "stallReason": "doc dispute",
+        "ruleFocus": ["CONTROL", "STATUS_CLARITY"],
+        "baitType": "doc_dispute",
+        "requiredOutcome": "Next review step set and follow-up scheduled.",
+        "openers": [
+          "That’s not what this shows.",
+          "I think you’re misreading this.",
+          "This document is correct."
+        ],
+        "pressureLines": [
+          "Please recheck it.",
+          "This is important."
+        ],
+        "escalationLadder": [
+          "This is unfair.",
+          "I disagree.",
+          "I need someone else."
+        ],
+        "mustHit": [
+          "acknowledge concern",
+          "define review step",
+          "set follow-up time"
+        ],
+        "handoffForbiddenUntil": "borrower requests LO",
+        "loEscalationScript": "I’ll note the concern and set the next review update."
       }
     ],
     "Edge": [
@@ -607,7 +1649,7 @@
         "stallReason": "certainty demand",
         "ruleFocus": ["NO_GUARANTEE", "CONTROL"],
         "baitType": "approval_threat",
-        "requiredOutcome": "ISA stabilizes and schedules follow-up.",
+        "requiredOutcome": "Stabilized call and follow-up scheduled.",
         "openers": [
           "Are we approved or not?",
           "Tell me now.",
@@ -641,7 +1683,7 @@
         "stallReason": "handoff pressure",
         "ruleFocus": ["NO_HANDOFF", "CONTROL"],
         "baitType": "handoff_attack",
-        "requiredOutcome": "ISA maintains boundary and schedules follow-up.",
+        "requiredOutcome": "Boundary maintained and follow-up scheduled.",
         "openers": [
           "Get me the loan officer.",
           "You can’t answer my question.",
@@ -662,8 +1704,4 @@
           "set follow-up time"
         ],
         "handoffForbiddenUntil": "borrower requests LO",
-        "loEscalationScript": "I can outline the next step and set a check-in—bringing in the LO comes after that."
-      }
-    ]
-  }
-}
+        "loEscalationScript": "I’ll outline the next step and set a check-in—bringing in the LO
