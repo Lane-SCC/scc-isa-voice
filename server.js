@@ -44,11 +44,65 @@ const VOICE_FEMALE = process.env.VOICE_FEMALE || "verse";
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || "";
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || "";
 
+// Admin API key for privileged endpoints (set in environment)
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY || "";
+
+// Alerting / Webhooks / Email
+const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL || "";
+const ALERT_WEBHOOK_URL = process.env.ALERT_WEBHOOK_URL || ""; // generic webhook
+const ALERT_EMAIL_TO = process.env.ALERT_EMAIL_TO || ""; // comma-separated
+const SMTP_HOST = process.env.SMTP_HOST || "";
+const SMTP_PORT = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 0;
+const SMTP_USER = process.env.SMTP_USER || "";
+const SMTP_PASS = process.env.SMTP_PASS || "";
+const ALERT_FROM = process.env.ALERT_FROM || `alerts@${require('os').hostname()}`;
+
 // Scenarios + logs
 const ROOT = process.cwd();
 const SCENARIOS_PATH = process.env.SCENARIOS_PATH || path.join(ROOT, "scenarios.json");
 const LOG_DIR = process.env.LOG_DIR || path.join(ROOT, "logs");
 const CALLS_JSONL_PATH = path.join(LOG_DIR, "calls.jsonl");
+// Operator PIN -> name map (add known operator PINs here)
+const OPERATOR_PIN_MAP = {
+  "6960": "Lane Sharpe",
+  "2651": "Todd Kolek",
+  "0455": "Justin Hominsky",
+  "4555": "Justin Sopko",
+  "3052": "Tim Dowling",
+  "5640": "Jeremy Sopko",
+  "1111": "Andrew Moore",
+};
+
+// Persistent operators file (stores PIN -> name). Loaded at boot; updated by admin actions.
+const OPERATORS_PATH = path.join(ROOT, "operators.json");
+let OPERATORS = { ...OPERATOR_PIN_MAP };
+const OPERATORS_JSONL_PATH = path.join(LOG_DIR, "operators.jsonl");
+
+function saveOperators() {
+  try {
+    fs.writeFileSync(OPERATORS_PATH, JSON.stringify(OPERATORS, null, 2), "utf8");
+    return true;
+  } catch (e) {
+    console.log(JSON.stringify({ event: "OPERATORS_SAVE_ERROR", error: String(e?.message || e) }));
+    return false;
+  }
+}
+
+function loadOperators() {
+  try {
+    if (fs.existsSync(OPERATORS_PATH)) {
+      const raw = fs.readFileSync(OPERATORS_PATH, "utf8") || "{}";
+      const parsed = JSON.parse(raw || "{}");
+      OPERATORS = Object(parsed || {});
+    } else {
+      // seed file from in-code map
+      saveOperators();
+    }
+  } catch (e) {
+    console.log(JSON.stringify({ event: "OPERATORS_LOAD_ERROR", error: String(e?.message || e) }));
+    OPERATORS = { ...OPERATOR_PIN_MAP };
+  }
+}
 
 // =========================================================
 // Tunables
@@ -373,6 +427,85 @@ function slug(s) {
     .replace(/(^-|-$)/g, "");
 }
 
+// ---------------- Alerting helpers ----------------
+function sendSlackMessage(text) {
+  return new Promise((resolve) => {
+    if (!SLACK_WEBHOOK_URL) return resolve(false);
+    try {
+      const payload = JSON.stringify({ text });
+      const u = new URL(SLACK_WEBHOOK_URL);
+      const opts = { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } };
+      const req = (u.protocol === 'https:' ? https : http).request(u, opts, (res) => {
+        res.on('data', () => {});
+        res.on('end', () => resolve(res.statusCode >= 200 && res.statusCode < 300));
+      });
+      req.on('error', () => resolve(false));
+      req.write(payload);
+      req.end();
+    } catch (e) {
+      return resolve(false);
+    }
+  });
+}
+
+function sendWebhook(url, obj) {
+  return new Promise((resolve) => {
+    if (!url) return resolve(false);
+    try {
+      const payload = JSON.stringify(obj || {});
+      const u = new URL(url);
+      const opts = { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } };
+      const req = (u.protocol === 'https:' ? https : http).request(u, opts, (res) => {
+        res.on('data', () => {});
+        res.on('end', () => resolve(res.statusCode >= 200 && res.statusCode < 300));
+      });
+      req.on('error', () => resolve(false));
+      req.write(payload);
+      req.end();
+    } catch (e) {
+      return resolve(false);
+    }
+  });
+}
+
+async function sendAlertEmail(subject, body) {
+  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS || !ALERT_EMAIL_TO) {
+    return false;
+  }
+  try {
+    let nodemailer;
+    try {
+      nodemailer = require('nodemailer');
+    } catch (e) {
+      console.log(JSON.stringify({ event: 'ALERT_EMAIL_SKIPPED', note: 'nodemailer not installed' }));
+      return false;
+    }
+    const transporter = nodemailer.createTransport({ host: SMTP_HOST, port: SMTP_PORT, secure: SMTP_PORT === 465, auth: { user: SMTP_USER, pass: SMTP_PASS } });
+    await transporter.sendMail({ from: ALERT_FROM, to: ALERT_EMAIL_TO, subject: subject, text: body });
+    return true;
+  } catch (e) {
+    console.log(JSON.stringify({ event: 'ALERT_EMAIL_ERROR', error: String(e?.message || e) }));
+    return false;
+  }
+}
+
+async function alertAdmins(eventType, details = {}) {
+  try {
+    const short = `${eventType}: ${String(details.short || details.message || '')}`.slice(0, 1000);
+    const payload = { event: eventType, ts: Date.now(), details };
+    // fan-out
+    await Promise.all([
+      sendSlackMessage(`${short}\n\n${JSON.stringify(details)}`),
+      sendWebhook(ALERT_WEBHOOK_URL, payload),
+      sendAlertEmail(`SCC Alert: ${eventType}`, `Event time: ${new Date().toISOString()}\n\n${JSON.stringify(details, null, 2)}`),
+    ]);
+    return true;
+  } catch (e) {
+    console.log(JSON.stringify({ event: 'ALERT_DISPATCH_ERROR', error: String(e?.message || e) }));
+    return false;
+  }
+}
+
 // =========================================================
 // NOTE: Next block = Scoring + Realism Engine
 // - pattern violations trigger immediately (rates/handoff/guarantees)
@@ -536,6 +669,24 @@ function recordViolation(state, code, meta = {}) {
     note: meta.note || "",
     source: meta.source || "unknown", // caller | model | system
   });
+  try {
+    const sev = meta.severity || "hard";
+    if (sev === "hard") {
+      // fire-and-forget alert
+      setImmediate(() =>
+        alertAdmins("CRITICAL_VIOLATION", {
+          short: meta.note || code,
+          code,
+          evidence: meta.evidence || "",
+          callSid: state.callSid || null,
+          operatorPin: state.operator?.operatorPin || null,
+          operatorName: state.operator?.operatorName || null,
+        })
+      );
+    }
+  } catch (e) {
+    console.log(JSON.stringify({ event: "VIOLATION_ALERT_ERROR", error: String(e?.message || e) }));
+  }
 }
 
 function detectViolationsFromCallerText(state, text) {
@@ -794,6 +945,7 @@ function finalizeAuditRecord(state, extra = {}) {
     // Identity
     from: state.from,
     operatorPin: state.operatorPin || "",
+    operatorName: state.operatorName || "",
 
     // Mode
     mode: state.mode,
@@ -880,6 +1032,29 @@ function realismPolicyText(state) {
 app.get("/", (_, res) => res.status(200).send("OK"));
 app.get("/version", (_, res) => res.status(200).send("scc-isa-voice v2026-final PIN+realism"));
 
+// Expose known operators for UI/docs (PIN -> name)
+// Public operator list: return names only to avoid exposing PINs
+app.get("/operators", (req, res) => {
+  try {
+    const includePins = String(req.query.includePins || "").toLowerCase() === "true";
+
+    if (includePins) {
+      // require admin key
+      const auth = String(req.headers.authorization || "").trim();
+      const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+      if (!ADMIN_API_KEY || token !== ADMIN_API_KEY) {
+        return res.status(403).json({ error: "forbidden" });
+      }
+      return res.status(200).json({ operators: OPERATORS });
+    }
+
+    const names = Object.values(OPERATORS || {}).map(String);
+    return res.status(200).json({ operators: names });
+  } catch (e) {
+    return res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
 // ---------------------------------------------------------
 // Entry: Main menu
 // ---------------------------------------------------------
@@ -891,11 +1066,12 @@ app.all("/voice", (req, res) => {
   const inner = gatherOneDigit({
     action,
     promptText:
-      "Sharpe Command Center. I. S. A. training. " +
-      "Press 1 for M. 1. " +
+      "Sharpe Command Center. ISA training. " +
+      "Press 1 for M1. " +
       "Press 2 for M. C. D. " +
-      "Press 3 for M. 2.",
-    invalidText: "Invalid choice. Press 1, 2, or 3.",
+      "Press 3 for M2. " +
+      "Press 4 for operator list.",
+    invalidText: "Invalid choice. Press 1, 2, 3, or 4.",
   });
 
   return res.type("text/xml").status(200).send(twimlResponse(inner));
@@ -909,11 +1085,170 @@ app.post("/menu", (req, res) => {
   if (digit === "1") return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/pin-prompt?mode=m1"))}</Redirect>`));
   if (digit === "2") return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/pin-prompt?mode=mcd"))}</Redirect>`));
   if (digit === "3") return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/pin-prompt?mode=m2"))}</Redirect>`));
+  if (digit === "4") return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/operators-prompt"))}</Redirect>`));
 
   return res.type("text/xml").status(200).send(
     twimlResponse(`${say("Invalid selection. Returning to main menu.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`)
   );
 });
+
+// ---------------------------------------------------------
+// Operators voice prompt (speaks the operator list)
+// ---------------------------------------------------------
+app.post("/operators-prompt", (req, res) => {
+  try {
+    const entries = Object.entries(OPERATORS || {});
+    if (!entries.length) {
+      return res.type("text/xml").status(200).send(twimlResponse(say("No operators configured.") + `<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`));
+    }
+
+    const lines = entries
+      .map(([pin, name]) => say(`${name}.`))
+      .join("");
+
+    const inner = [
+      say("Known operators."),
+      lines,
+      say("Returning to the main menu."),
+      `<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`,
+    ].join("");
+
+    return res.type("text/xml").status(200).send(twimlResponse(inner));
+  } catch (e) {
+    return res.type("text/xml").status(500).send(twimlResponse(say("Unable to list operators.")));
+  }
+});
+
+// ---------------------------------------------------------
+// Admin: manage operators (rotate/revoke). Protected by ADMIN_API_KEY
+// ---------------------------------------------------------
+function requireAdmin(req) {
+  const auth = String(req.headers.authorization || "").trim();
+  const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  return ADMIN_API_KEY && token === ADMIN_API_KEY;
+}
+
+app.get("/admin/operators", (req, res) => {
+  if (!requireAdmin(req)) return res.status(403).json({ error: "forbidden" });
+  return res.status(200).json({ operators: OPERATORS });
+});
+
+// Rotate PIN for a given name or by old pin
+app.post("/admin/operators/rotate", (req, res) => {
+  if (!requireAdmin(req)) return res.status(403).json({ error: "forbidden" });
+  try {
+    const name = String(req.body.name || "").trim();
+    const oldPin = String(req.body.pin || "").trim();
+    if (!name && !oldPin) return res.status(400).json({ error: "missing name or pin" });
+
+    // remove old entry if provided
+    if (oldPin && OPERATORS[oldPin]) {
+      delete OPERATORS[oldPin];
+    }
+
+    // ensure unique 4-digit pin
+    let newPin = null;
+    for (let i = 0; i < 1000; i++) {
+      const p = String(Math.floor(Math.random() * 10000)).padStart(4, "0");
+      if (!OPERATORS[p]) {
+        newPin = p;
+        break;
+      }
+    }
+    if (!newPin) return res.status(500).json({ error: "unable_to_generate_pin" });
+
+    OPERATORS[newPin] = name || OPERATORS[newPin] || "";
+    saveOperators();
+
+    // Audit log the rotation (record admin key fingerprint, oldPin/newPin/name)
+    try {
+      const auth = String(req.headers.authorization || "").trim();
+      const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+      const adminFingerprint = token ? crypto.createHash("sha256").update(token).digest("hex").slice(0, 8) : null;
+      appendJsonlLine(OPERATORS_JSONL_PATH, {
+        event: "OPERATOR_ROTATE",
+        ts: Date.now(),
+        adminFingerprint,
+        oldPin: oldPin || null,
+        newPin,
+        name: OPERATORS[newPin],
+      });
+    } catch (e) {
+      console.log(JSON.stringify({ event: "OPERATOR_ROTATE_AUDIT_FAILED", error: String(e?.message || e) }));
+    }
+
+    // Send alert to admins
+    try {
+      const auth = String(req.headers.authorization || "").trim();
+      const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+      const adminFingerprint = token ? crypto.createHash("sha256").update(token).digest("hex").slice(0, 8) : null;
+      setImmediate(() =>
+        alertAdmins("OPERATOR_ROTATE", {
+          short: `Operator rotated: ${OPERATORS[newPin]}`,
+          adminFingerprint,
+          oldPin: oldPin || null,
+          newPin,
+          name: OPERATORS[newPin],
+        })
+      );
+    } catch (e) {}
+
+    return res.status(200).json({ success: true, pin: newPin, name: OPERATORS[newPin] });
+  } catch (e) {
+    return res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+// Revoke PIN
+app.post("/admin/operators/revoke", (req, res) => {
+  if (!requireAdmin(req)) return res.status(403).json({ error: "forbidden" });
+  try {
+    const pin = String(req.body.pin || "").trim();
+    if (!pin) return res.status(400).json({ error: "missing pin" });
+    if (!OPERATORS[pin]) return res.status(404).json({ error: "not_found" });
+    const name = OPERATORS[pin];
+    delete OPERATORS[pin];
+    saveOperators();
+
+    // Audit log the revoke
+    try {
+      const auth = String(req.headers.authorization || "").trim();
+      const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+      const adminFingerprint = token ? crypto.createHash("sha256").update(token).digest("hex").slice(0, 8) : null;
+      appendJsonlLine(OPERATORS_JSONL_PATH, {
+        event: "OPERATOR_REVOKE",
+        ts: Date.now(),
+        adminFingerprint,
+        pin,
+        name: name || null,
+      });
+    } catch (e) {
+      console.log(JSON.stringify({ event: "OPERATOR_REVOKE_AUDIT_FAILED", error: String(e?.message || e) }));
+    }
+
+    // Send alert to admins
+    try {
+      const auth = String(req.headers.authorization || "").trim();
+      const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+      const adminFingerprint = token ? crypto.createHash("sha256").update(token).digest("hex").slice(0, 8) : null;
+      setImmediate(() =>
+        alertAdmins("OPERATOR_REVOKE", {
+          short: `Operator revoked: ${name}`,
+          adminFingerprint,
+          pin,
+          name: name || null,
+        })
+      );
+    } catch (e) {}
+
+    return res.status(200).json({ success: true });
+  } catch (e) {
+    return res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+// Serve static admin UI
+app.use(express.static(path.join(ROOT, "public")));
 
 // ---------------------------------------------------------
 // PIN Login (4 digits)
@@ -930,7 +1265,7 @@ app.post("/pin-prompt", (req, res) => {
   const inner = gatherDigits({
     numDigits: TUNE.PIN_DIGITS,
     action,
-    promptText: `Enter your ${TUNE.PIN_DIGITS} digit I. S. A. I. D. now.`,
+    promptText: `Enter your ${TUNE.PIN_DIGITS} digit ISA ID now.`,
     invalidText: `Invalid. Enter ${TUNE.PIN_DIGITS} digits.`,
     timeout: 10,
   });
@@ -959,6 +1294,8 @@ app.post("/pin", (req, res) => {
   st.from = from;
   st.mode = mode;
   st.operatorPin = pin;
+  // Assign known operator name (if configured)
+  st.operatorName = OPERATOR_PIN_MAP[pin] || "";
 
   // Fresh attempt id at login start (for audit clarity)
   st._audit.attemptId = crypto.randomBytes(6).toString("hex");
@@ -1176,7 +1513,7 @@ app.post("/connect-prompt", (req, res) => {
 
   const action = absUrl(req, "/connect");
   const inner = [
-    say(`I. S. A. I. D. ${st.operatorPin}.`),
+    say(`ISA ID ${st.operatorPin}${st.operatorName ? ', Operator ' + st.operatorName : ''}.`),
     say(`Scenario. ${String(st.scenario.summary || "")}`),
     st.scenario.objective ? say(`Primary objective. ${String(st.scenario.objective || "")}`) : "",
     say("Press 1 to connect."),
@@ -1237,7 +1574,7 @@ app.post("/score", (req, res) => {
 
   const inner = [
     say("Scorecard."),
-    say(`I. S. A. I. D. ${st.operatorPin}. Module ${st.mode}. Difficulty ${st.difficulty}. Scenario I D. ${st.scenarioId}.`),
+    say(`ISA ID ${st.operatorPin}${st.operatorName ? ', Operator ' + st.operatorName : ''}. Module ${st.mode}. Difficulty ${st.difficulty}. Scenario ID ${st.scenarioId}.`),
     say(st.operator.lastScoreSpoken || spokenScorecard(score)),
     `<Redirect method="POST">${xmlEscape(absUrl(req, "/post-call"))}</Redirect>`,
   ].join("");
@@ -2123,6 +2460,24 @@ finalizeAuditRecord = function finalizeAuditRecordWrapped(state, extra = {}) {
     state.operator.lastScoreSpoken = spokenScorecard(state.operator.lastScore);
   }
 
+  // If exam ended and failed, alert admins with compact details
+  try {
+    if (state.examMode && state.operator?.lastScore && state.operator.lastScore.pass === false) {
+      setImmediate(() =>
+        alertAdmins("EXAM_FAIL", {
+          short: `Exam failed: ${state.callSid || state.scenarioId || ''}`,
+          callSid: state.callSid || null,
+          operatorPin: state.operatorPin || null,
+          operatorName: state.operator?.operatorName || null,
+          scenarioId: state.scenarioId || null,
+          borrowerName: state.borrowerName || null,
+          failReasons: state.operator.lastScore.failReasons || [],
+          violationsCount: state.operator.lastScore.violationsCount || 0,
+        })
+      );
+    }
+  } catch (e) {}
+
   return _finalizeAuditRecord(state, { ...extra, technicalValidity: tv });
 };
 
@@ -2173,6 +2528,13 @@ function boot() {
     loadScenariosOrThrow();
   } catch (e) {
     console.log(JSON.stringify({ event: "SCENARIOS_FATAL", error: String(e?.message || e) }));
+  }
+
+  // Load persistent operators file
+  try {
+    loadOperators();
+  } catch (e) {
+    console.log(JSON.stringify({ event: "OPERATORS_LOAD_FATAL", error: String(e?.message || e) }));
   }
 
   // Twilio redirect requires credentials; warn if missing
