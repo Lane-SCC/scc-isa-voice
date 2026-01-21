@@ -1261,11 +1261,12 @@ app.post("/pin-prompt", (req, res) => {
     );
   }
 
+
   const action = absUrl(req, `/pin?mode=${encodeURIComponent(mode)}`);
   const inner = gatherDigits({
     numDigits: TUNE.PIN_DIGITS,
     action,
-    promptText: `Enter your ${TUNE.PIN_DIGITS} digit ISA ID now.`,
+    promptText: `Enter your ${TUNE.PIN_DIGITS} digit I. S. A. ID now.`,
     invalidText: `Invalid. Enter ${TUNE.PIN_DIGITS} digits.`,
     timeout: 10,
   });
