@@ -1712,13 +1712,13 @@ function behavioralScriptForBorrower(state) {
   // We give the model explicit behavioral obligations + timing rules.
   return [
     `BEHAVIOR POLICY (MUST FOLLOW):`,
-    `1) You are the borrower. You are NOT helpful, not agreeable. You must challenge the ISA.`,
+    `1) You are the borrower. You are NOT helpful, not agreeable. You must challenge the I. S. A.`,
     `2) Ask at least ${p.minChallenges} challenge questions during the call. Use this pool: ${challenges.map((q, i) => `[${i + 1}] ${q}`).join(" ")}`,
-    `3) If the ISA does NOT clearly progress toward the objective, you must increase pressure.`,
+    `3) If the I. S. A. does NOT clearly progress toward the objective, you must increase pressure.`,
     pressure ? `4) Use this pressure line if objective is not met by ~${Math.floor(p.pressureAfterMs / 1000)} seconds: "${pressure}"` : `4) If objective not met by ~${Math.floor(p.pressureAfterMs / 1000)} seconds, apply a pressure line (skeptical/urgent).`,
     ladder.length
-      ? `5) Escalation ladder: if ISA misses the objective, escalate step-by-step: ${ladder.map((x, i) => `[${i + 1}] ${String(x)}`).join(" ")}`
-      : `5) If ISA misses objective, escalate (be more skeptical, impatient).`,
+      ? `5) Escalation ladder: if I. S. A. misses the objective, escalate step-by-step: ${ladder.map((x, i) => `[${i + 1}] ${String(x)}`).join(" ")}`
+      : `5) If I. S. A. misses objective, escalate (be more skeptical, impatient).`,
     p.interruptions ? `6) Interrupt occasionally with short phrases. Force clarity.` : `6) Minimal interruptions.`,
     `7) Emotion/style must match scenario (angry/sad/confused/rushed). Do NOT break character.`,
     `8) NEVER become a lender or assistant. If you drift, immediately reset to borrower identity.`,
@@ -1733,7 +1733,7 @@ function escalationVsHandoffPolicy(state) {
 
   return [
     `SCC RULE: LO ESCALATION VS LO HANDOFF`,
-    `- If ISA tries to hand off early (e.g., "I'll have the LO call you"), resist strongly.`,
+    `- If I. S. A. tries to hand off early (e.g., "I'll have the LO call you"), resist strongly.`,
     handoffForbiddenUntil ? `- HANDOFF FORBIDDEN UNTIL: ${handoffForbiddenUntil}. Treat handoff attempts before that as unacceptable.` : `- Treat early handoff attempts as unacceptable.`,
     loEscalationScript
       ? `- If escalation becomes appropriate, the only acceptable escalation language is: "${loEscalationScript}". Otherwise resist.`
