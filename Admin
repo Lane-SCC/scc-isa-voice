@@ -1,1 +1,58 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Operators Admin</title>
+  <style>body{font-family:system-ui,Arial;margin:16px}button{margin-left:8px}</style>
+</head>
+<body>
+  <h2>Operators Admin</h2>
+  <p>Enter admin API key to manage operator PINs.</p>
+  <input id="key" placeholder="ADMIN_API_KEY" style="width:300px" />
+  <button id="auth">Load Operators</button>
+  <div id="ops"></div>
+<script>
+async function api(path, opts={}){
+  const key = document.getElementById('key').value.trim();
+  opts.headers = opts.headers || {};
+  if (key) opts.headers['Authorization'] = 'Bearer ' + key;
+  const r = await fetch(path, opts);
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(r.status + ' ' + t);
+  }
+  return r.json();
+}
+
+async function load(){
+  try{
+    const data = await api('/admin/operators');
+    const ops = data.operators || {};
+    const el = document.getElementById('ops');
+    el.innerHTML = '';
+    const table = document.createElement('table');
+    table.border=1;
+    const tbody = document.createElement('tbody');
+    for(const pin of Object.keys(ops)){
+      const tr = document.createElement('tr');
+      const td1 = document.createElement('td'); td1.textContent = pin;
+      const td2 = document.createElement('td'); td2.textContent = ops[pin];
+      const td3 = document.createElement('td');
+      const rbtn = document.createElement('button'); rbtn.textContent='Revoke';
+      rbtn.onclick = async ()=>{ if(!confirm('Revoke '+ops[pin]+'?'))return; await api('/admin/operators/revoke',{method:'POST',headers:{'Content-Type':'application/json'}, body: JSON.stringify({pin})}); load(); };
+      const rot = document.createElement('button'); rot.textContent='Rotate PIN';
+      rot.onclick = async ()=>{ if(!confirm('Rotate PIN for '+ops[pin]+'?'))return; await api('/admin/operators/rotate',{method:'POST',headers:{'Content-Type':'application/json'}, body: JSON.stringify({pin, name: ops[pin]})}); load(); };
+      td3.appendChild(rbtn); td3.appendChild(rot);
+      tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3);
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    el.appendChild(table);
+  }catch(e){ alert('Error: '+e.message); }
+}
+
+document.getElementById('auth').addEventListener('click', load);
+</script>
+</body>
+</html>
 
