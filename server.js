@@ -1266,7 +1266,7 @@ app.post("/pin-prompt", (req, res) => {
   const inner = gatherDigits({
     numDigits: TUNE.PIN_DIGITS,
     action,
-    promptText: `Enter your ${TUNE.PIN_DIGITS} digit I. S. A. ID now.`,
+    promptText: `Enter your ${TUNE.PIN_DIGITS} digit I. S. A. I. D. now.`,
     invalidText: `Invalid. Enter ${TUNE.PIN_DIGITS} digits.`,
     timeout: 10,
   });
@@ -1514,7 +1514,7 @@ app.post("/connect-prompt", (req, res) => {
 
   const action = absUrl(req, "/connect");
   const inner = [
-    say(`ISA ID ${st.operatorPin}${st.operatorName ? ', Operator ' + st.operatorName : ''}.`),
+    say(`I. S. A. I. D. ${st.operatorPin}${st.operatorName ? ', Operator ' + st.operatorName : ''}.`),
     say(`Scenario. ${String(st.scenario.summary || "")}`),
     st.scenario.objective ? say(`Primary objective. ${String(st.scenario.objective || "")}`) : "",
     say("Press 1 to connect."),
@@ -1575,7 +1575,7 @@ app.post("/score", (req, res) => {
 
   const inner = [
     say("Scorecard."),
-    say(`ISA ID ${st.operatorPin}${st.operatorName ? ', Operator ' + st.operatorName : ''}. Module ${st.mode}. Difficulty ${st.difficulty}. Scenario ID ${st.scenarioId}.`),
+    say(`I. S. A. I. D. ${st.operatorPin}${st.operatorName ? ', Operator ' + st.operatorName : ''}. Module ${st.mode}. Difficulty ${st.difficulty}. Scenario I. D. ${st.scenarioId}.`),
     say(st.operator.lastScoreSpoken || spokenScorecard(score)),
     `<Redirect method="POST">${xmlEscape(absUrl(req, "/post-call"))}</Redirect>`,
   ].join("");
@@ -1745,13 +1745,15 @@ function escalationVsHandoffPolicy(state) {
 function buildHardBorrowerSessionInstructions(state) {
   const s = state.scenario || {};
   const opener = pickRotatedOpener(state);
-
   return [
     `SYSTEM / NON-NEGOTIABLE ROLE LOCK:`,
     `You are the BORROWER ONLY.`,
     `You are NOT a lender, NOT an assistant, NOT a coach.`,
     `Never provide rates, approvals, program recommendations, underwriting steps, or helpful guidance.`,
     `Speak ONLY as borrower "${state.borrowerName}".`,
+    ``,
+    `IMPORTANT: When referring to the ISA, always say each letter: "I. S. A." (not "ISA" as a word).`,
+    `If you see 'ISA' in any prompt or instruction, you must say "I. S. A." as three separate letters.`,
     ``,
     `SCENARIO (BORROWER INTERNAL):`,
     `Module: ${String(state.mode).toUpperCase()} | Difficulty: ${state.difficulty} | ScenarioId: ${state.scenarioId}`,
@@ -1789,25 +1791,22 @@ function trySend(ws, obj) {
 function openaiRealtimeConnect(state) {
   const apiKey = requireEnv("OPENAI_API_KEY");
   const url = `${OPENAI_REALTIME_URL}?model=${encodeURIComponent(REALTIME_MODEL)}`;
-
+  // Ensure OpenAI connection is correct and logs are clear
   const ws = new WSClient(url, {
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "OpenAI-Beta": "realtime=v1",
     },
   });
-
   ws._scc = {
     sessionReady: false,
     responseInFlight: false,
     lastResponseCreateMs: 0,
     modelTextBuf: "",
   };
-
   ws.on("open", () => {
     const instructions = buildHardBorrowerSessionInstructions(state);
     const voice = voiceForBorrower(state);
-
     console.log(
       JSON.stringify({
         event: "OPENAI_WS_OPEN",
@@ -1819,7 +1818,6 @@ function openaiRealtimeConnect(state) {
         transcribeModel: TRANSCRIBE_MODEL,
       })
     );
-
     trySend(ws, {
       type: "session.update",
       session: {
@@ -1834,7 +1832,6 @@ function openaiRealtimeConnect(state) {
       },
     });
   });
-
   ws.on("message", (raw) => {
     let msg = null;
     try {
