@@ -1066,12 +1066,11 @@ app.all("/voice", (req, res) => {
   const inner = gatherOneDigit({
     action,
     promptText:
-      "Sharpe Command Center. ISA training. " +
-      "Press 1 for M1. " +
+      "Sharpe Command Center. I. S. A. training. " +
+      "Press 1 for M. 1. " +
       "Press 2 for M. C. D. " +
-      "Press 3 for M2. " +
-      "Press 4 for operator list.",
-    invalidText: "Invalid choice. Press 1, 2, 3, or 4.",
+      "Press 3 for M. 2.",
+    invalidText: "Invalid choice. Press 1, 2, or 3.",
   });
 
   return res.type("text/xml").status(200).send(twimlResponse(inner));
@@ -1085,7 +1084,6 @@ app.post("/menu", (req, res) => {
   if (digit === "1") return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/pin-prompt?mode=m1"))}</Redirect>`));
   if (digit === "2") return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/pin-prompt?mode=mcd"))}</Redirect>`));
   if (digit === "3") return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/pin-prompt?mode=m2"))}</Redirect>`));
-  if (digit === "4") return res.type("text/xml").status(200).send(twimlResponse(`<Redirect method="POST">${xmlEscape(absUrl(req, "/operators-prompt"))}</Redirect>`));
 
   return res.type("text/xml").status(200).send(
     twimlResponse(`${say("Invalid selection. Returning to main menu.")}<Redirect method="POST">${xmlEscape(absUrl(req, "/voice"))}</Redirect>`)
@@ -1261,13 +1259,12 @@ app.post("/pin-prompt", (req, res) => {
     );
   }
 
-
   const action = absUrl(req, `/pin?mode=${encodeURIComponent(mode)}`);
   const inner = gatherDigits({
     numDigits: TUNE.PIN_DIGITS,
     action,
-    promptText: `Enter your ${TUNE.PIN_DIGITS} digit I. S. A. I. D. now.`,
-    invalidText: `Invalid. Enter ${TUNE.PIN_DIGITS} digits.`,
+    promptText: `Enter your I. S. A. I. D. now.`,
+    invalidText: `Invalid. Enter your I. S. A. I. D. again.`,
     timeout: 10,
   });
 
@@ -1514,7 +1511,7 @@ app.post("/connect-prompt", (req, res) => {
 
   const action = absUrl(req, "/connect");
   const inner = [
-    say(`I. S. A. I. D. ${st.operatorPin}${st.operatorName ? ', Operator ' + st.operatorName : ''}.`),
+    say(`Operator connected.`),
     say(`Scenario. ${String(st.scenario.summary || "")}`),
     st.scenario.objective ? say(`Primary objective. ${String(st.scenario.objective || "")}`) : "",
     say("Press 1 to connect."),
