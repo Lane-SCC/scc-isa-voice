@@ -349,6 +349,15 @@ function cancelResponse(ws) {
 }
 
 // ---------------- Twilio stream bridge ----------------
+// Ensure WebSocketServer and server are defined before wss is used
+const http = require("http");
+const { WebSocketServer } = require("ws");
+
+app.use(express.static("public"));
+
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: "/twilio" });
+
 wss.on("connection", (twilioWs, req) => {
   let streamSid = null;
   let callSid = null;
