@@ -1,3 +1,6 @@
+// ---------------- Express app initialization ----------------
+const express = require("express");
+const app = express();
 // ---------------- Voice selection (hard lock) ----------------
 const MALE_NAMES = new Set(["steve", "mike", "john", "david", "mark", "tom", "jim", "brian", "chris", "matt"]);
 const FEMALE_NAMES = new Set(["sarah", "jessica", "ashley", "emily", "amy", "kate", "lisa", "rachel", "anna", "mary"]);
