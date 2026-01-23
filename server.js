@@ -1,3 +1,9 @@
+// ---------------- Helper: clampInt ----------------
+function clampInt(val, def, min, max) {
+  const n = parseInt(val, 10);
+  if (!Number.isFinite(n)) return def;
+  return Math.max(min, Math.min(max, n));
+}
 // ---------------- Express app initialization ----------------
 const express = require("express");
 const app = express();
