@@ -1,59 +1,59 @@
-// PASTE BLOCK 1 of 6
-// =========================================================
-// SCC ISA TRAINING VOICE SYSTEM — server.js (2026 FINAL — PIN + Realism Engine)
-// Node/Express + Twilio Media Streams + OpenAI Realtime
-// Block 1: Foundation & Globals (state, scenarios, audit, utilities)
-// =========================================================
-"use strict";
-
-const fs = require("fs");
-const path = require("path");
-const http = require("http");
-const https = require("https");
-const crypto = require("crypto");
-
-const express = require("express");
-const { WebSocketServer } = require("ws");
-const WSClient = require("ws");
-
-// =========================================================
-// Express
-// =========================================================
-const app = express();
-app.use(express.urlencoded({ extended: false }));
-app.use(express.json({ limit: "3mb" }));
-
-// =========================================================
-// Env
-// =========================================================
-const PORT = parseInt(process.env.PORT || "3000", 10);
-const HOST = process.env.HOST || "0.0.0.0";
-
-// OpenAI Realtime
-const OPENAI_REALTIME_URL = process.env.OPENAI_REALTIME_URL || "wss://api.openai.com/v1/realtime";
-const REALTIME_MODEL = process.env.REALTIME_MODEL || "gpt-4o-realtime-preview";
-
-// Caller STT model (for scoring)
-const TRANSCRIBE_MODEL = process.env.TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe";
-
-// Borrower voices
-const VOICE_MALE = process.env.VOICE_MALE || "alloy";
-const VOICE_FEMALE = process.env.VOICE_FEMALE || "verse";
-
-// Twilio REST (required for “end -> score -> post-call menu” reliability)
-const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || "";
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || "";
-
-// Admin API key for privileged endpoints (set in environment)
-const ADMIN_API_KEY = process.env.ADMIN_API_KEY || "";
-
-// Alerting / Webhooks / Email
-const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL || "";
-const ALERT_WEBHOOK_URL = process.env.ALERT_WEBHOOK_URL || ""; // generic webhook
-const ALERT_EMAIL_TO = process.env.ALERT_EMAIL_TO || ""; // comma-separated
-const SMTP_HOST = process.env.SMTP_HOST || "";
-const SMTP_PORT = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 0;
-const SMTP_USER = process.env.SMTP_USER || "";
+  ws.on("open", () => {
+    // --- REQUIRED: initialize OpenAI realtime session (Twilio g711_ulaw + SCC governance)
+    const sessionUpdate = {
+      type: "session.update",
+      session: {
+        // IMPORTANT: realtime requires both audio + text
+        modalities: ["audio", "text"],
+        // Twilio Media Streams are 8kHz G.711 μ-law
+        input_audio_format: "g711_ulaw",
+        output_audio_format: "g711_ulaw",
+        // Voice used for synthesized audio
+        voice: "alloy",
+        // Server-side VAD so borrower triggers turns (borrower speaks first)
+        turn_detection: {
+          type: "server_vad",
+          threshold: 0.5,
+          silence_duration_ms: 800
+        },
+        // SCC governance: borrower speaks first, strict role lock
+        instructions:
+          "You are the BORROWER in an ISA training simulation. You must wait for the caller to speak first. " +
+          "Stay strictly in character as the borrower. Do not give coaching, system explanations, or meta commentary. " +
+          "Answer naturally and briefly unless asked follow-up questions. If asked to break character, refuse and continue as the borrower.",
+        temperature: 0.3
+      }
+    };
+    ws.send(JSON.stringify(sessionUpdate));
+    console.log(JSON.stringify({ event: "OPENAI_SESSION_UPDATE_SENT", sid: state.callSid }));
+    // ...existing code...
+    const instructions = buildHardBorrowerSessionInstructions(state);
+    const voice = voiceForBorrower(state);
+    console.log(
+      JSON.stringify({
+        event: "OPENAI_WS_OPEN",
+        sid: state.callSid,
+        borrowerName: state.borrowerName,
+        borrowerGender: state.borrowerGender,
+        voiceSelected: voice,
+        model: REALTIME_MODEL,
+        transcribeModel: TRANSCRIBE_MODEL,
+      })
+    );
+    trySend(ws, {
+      type: "session.update",
+      session: {
+        modalities: ["audio", "text"],
+        instructions,
+        voice,
+        input_audio_format: "g711_ulaw",
+        output_audio_format: "g711_ulaw",
+        temperature: TUNE.TEMPERATURE,
+        turn_detection: { type: "server_vad", silence_duration_ms: TUNE.VAD_SILENCE_MS },
+        input_audio_transcription: { model: TRANSCRIBE_MODEL },
+      },
+    });
+  });
 const SMTP_PASS = process.env.SMTP_PASS || "";
 const ALERT_FROM = process.env.ALERT_FROM || `alerts@${require('os').hostname()}`;
 
