@@ -8,10 +8,18 @@
 <body>
   <h2>Operators Admin</h2>
   <p>Enter admin API key to manage operator PINs.</p>
-  <input id="key" placeholder="ADMIN_API_KEY" style="width:300px" />
+  <input id="key" type="password" inputmode="text" autocomplete="off" placeholder="ADMIN_API_KEY" style="width:300px" />
   <button id="auth">Load Operators</button>
+  <span id="status" style="margin-left:8px;color:#444"></span>
   <div id="ops"></div>
 <script>
+const statusEl = document.getElementById('status');
+
+function setStatus(msg, isError=false){
+  statusEl.textContent = msg || '';
+  statusEl.style.color = isError ? '#b00020' : '#444';
+}
+
 async function api(path, opts={}){
   const key = document.getElementById('key').value.trim();
   opts.headers = opts.headers || {};
@@ -26,6 +34,7 @@ async function api(path, opts={}){
 
 async function load(){
   try{
+    setStatus('Loading...');
     const data = await api('/admin/operators');
     const ops = data.operators || {};
     const el = document.getElementById('ops');
@@ -48,11 +57,16 @@ async function load(){
     }
     table.appendChild(tbody);
     el.appendChild(table);
-  }catch(e){ alert('Error: '+e.message); }
+    setStatus('Loaded.');
+  }catch(e){
+    setStatus('Error: ' + e.message, true);
+  }
 }
 
 document.getElementById('auth').addEventListener('click', load);
+document.getElementById('key').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') load();
+});
 </script>
 </body>
 </html>
-
