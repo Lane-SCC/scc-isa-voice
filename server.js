@@ -109,6 +109,10 @@ app.post("/voice", (req, res) => {
   return res.type("text/xml").status(200).send(streamTwiml(req));
 });
 
+app.get("/voice", (req, res) => {
+  return res.type("text/xml").status(200).send(streamTwiml(req));
+});
+
 app.post("/connect-prompt", (req, res) => {
   return res.type("text/xml").status(200).send(streamTwiml(req));
 });
