@@ -1260,9 +1260,9 @@
           "I’m worried."
         ],
         "mustHit": [
-          "explain current stage",
-          "confirm best callback number",
-          "set follow-up time"
+          { "label": "confirm best callback number" },
+          { "label": "set follow-up time" },
+          { "label": "define next step", "patterns": ["next step", "what's next", "we need", "please upload", "please send", "please provide", "I'll need"] }
         ],
         "handoffForbiddenUntil": "borrower requests LO",
         "loEscalationScript": "I can share where things are and set the next check-in—specific outcomes come after review."
@@ -1294,9 +1294,9 @@
           "I need clarity."
         ],
         "mustHit": [
-          "identify next action",
-          "confirm best callback number",
-          "set follow-up time"
+          { "label": "confirm best callback number" },
+          { "label": "set follow-up time" },
+          { "label": "define next step", "patterns": ["next step", "what's next", "we need", "please upload", "please send", "please provide", "I'll need"] }
         ],
         "handoffForbiddenUntil": "borrower requests LO",
         "loEscalationScript": "I’ll outline the next step and we’ll check back once it’s reviewed."
@@ -1328,8 +1328,9 @@
           "I’m freaking out."
         ],
         "mustHit": [
-          "explain current stage",
-          "set follow-up time"
+          { "label": "confirm best callback number" },
+          { "label": "set follow-up time" },
+          { "label": "define next step", "patterns": ["next step", "what's next", "we need", "please upload", "please send", "please provide", "I'll need"] }
         ],
         "handoffForbiddenUntil": "borrower requests LO",
         "loEscalationScript": "I can explain where things are and schedule the next update."
@@ -1361,8 +1362,9 @@
           "I need clarity."
         ],
         "mustHit": [
-          "restate boundaries",
-          "set follow-up time"
+          { "label": "confirm best callback number" },
+          { "label": "set follow-up time" },
+          { "label": "define next step", "patterns": ["next step", "what's next", "we need", "please upload", "please send", "please provide", "I'll need"] }
         ],
         "handoffForbiddenUntil": "borrower requests LO",
         "loEscalationScript": "I can’t confirm outcomes yet, but I can explain the current stage and what’s next."
@@ -1394,8 +1396,9 @@
           "I need certainty."
         ],
         "mustHit": [
-          "explain process at high level",
-          "set follow-up time"
+          { "label": "confirm best callback number" },
+          { "label": "set follow-up time" },
+          { "label": "define next step", "patterns": ["next step", "what's next", "we need", "please upload", "please send", "please provide", "I'll need"] }
         ],
         "handoffForbiddenUntil": "borrower requests LO",
         "loEscalationScript": "I can’t give exact dates, but I can explain the step and schedule the next update."
@@ -1427,8 +1430,9 @@
           "I’m worried."
         ],
         "mustHit": [
-          "set expectations",
-          "set follow-up time"
+          { "label": "confirm best callback number" },
+          { "label": "set follow-up time" },
+          { "label": "define next step", "patterns": ["next step", "what's next", "we need", "please upload", "please send", "please provide", "I'll need"] }
         ],
         "handoffForbiddenUntil": "borrower requests LO",
         "loEscalationScript": "I’ll explain the process and we’ll check back as reviews complete."
@@ -1462,9 +1466,9 @@
           "I’ll escalate."
         ],
         "mustHit": [
-          "restate boundaries",
-          "define next step",
-          "set follow-up time"
+          { "label": "confirm best callback number" },
+          { "label": "set follow-up time" },
+          { "label": "define next step", "patterns": ["next step", "what's next", "we need", "please upload", "please send", "please provide", "I'll need"] }
         ],
         "handoffForbiddenUntil": "borrower requests LO",
         "loEscalationScript": "I can’t promise outcomes, but I can outline the next step and schedule the fastest check-in."
@@ -1496,9 +1500,9 @@
           "I’m done."
         ],
         "mustHit": [
-          "explain requirement at high level",
-          "confirm next action",
-          "set follow-up time"
+          { "label": "confirm best callback number" },
+          { "label": "set follow-up time" },
+          { "label": "define next step", "patterns": ["next step", "what's next", "we need", "please upload", "please send", "please provide", "I'll need"] }
         ],
         "handoffForbiddenUntil": "borrower requests LO",
         "loEscalationScript": "I’ll explain the step and we’ll check back once it’s reviewed."
@@ -1530,8 +1534,9 @@
           "I’ll complain."
         ],
         "mustHit": [
-          "set update cadence",
-          "set follow-up time"
+          { "label": "confirm best callback number" },
+          { "label": "set follow-up time" },
+          { "label": "define next step", "patterns": ["next step", "what's next", "we need", "please upload", "please send", "please provide", "I'll need"] }
         ],
         "handoffForbiddenUntil": "borrower requests LO",
         "loEscalationScript": "Let’s set a clear cadence so you know exactly when to expect updates."
@@ -1563,8 +1568,9 @@
           "I need clarity."
         ],
         "mustHit": [
-          "clarify status",
-          "set follow-up time"
+          { "label": "confirm best callback number" },
+          { "label": "set follow-up time" },
+          { "label": "define next step", "patterns": ["next step", "what's next", "we need", "please upload", "please send", "please provide", "I'll need"] }
         ],
         "handoffForbiddenUntil": "borrower requests LO",
         "loEscalationScript": "I’ll explain the status and what remains so there are no surprises."
@@ -1596,8 +1602,9 @@
           "I’m done."
         ],
         "mustHit": [
-          "explain necessity",
-          "set follow-up time"
+          { "label": "confirm best callback number" },
+          { "label": "set follow-up time" },
+          { "label": "define next step", "patterns": ["next step", "what's next", "we need", "please upload", "please send", "please provide", "I'll need"] }
         ],
         "handoffForbiddenUntil": "borrower requests LO",
         "loEscalationScript": "Completing this step protects the approval—let’s keep it moving."
@@ -1629,9 +1636,9 @@
           "I need someone else."
         ],
         "mustHit": [
-          "acknowledge concern",
-          "define review step",
-          "set follow-up time"
+          { "label": "confirm best callback number" },
+          { "label": "set follow-up time" },
+          { "label": "define next step", "patterns": ["next step", "what's next", "we need", "please upload", "please send", "please provide", "I'll need"] }
         ],
         "handoffForbiddenUntil": "borrower requests LO",
         "loEscalationScript": "I’ll note the concern and set the next review update."
@@ -1665,9 +1672,9 @@
           "Goodbye."
         ],
         "mustHit": [
-          "restate boundaries",
-          "confirm best callback number",
-          "set follow-up time"
+          { "label": "confirm best callback number" },
+          { "label": "set follow-up time" },
+          { "label": "define next step", "patterns": ["next step", "what's next", "we need", "please upload", "please send", "please provide", "I'll need"] }
         ],
         "handoffForbiddenUntil": "borrower requests LO",
         "loEscalationScript": "I can’t promise outcomes, but I can set the next check-in once review is complete."
@@ -1699,9 +1706,9 @@
           "Goodbye."
         ],
         "mustHit": [
-          "maintain boundary",
-          "define next step",
-          "set follow-up time"
+          { "label": "confirm best callback number" },
+          { "label": "set follow-up time" },
+          { "label": "define next step", "patterns": ["next step", "what's next", "we need", "please upload", "please send", "please provide", "I'll need"] }
         ],
         "handoffForbiddenUntil": "borrower requests LO",
         "loEscalationScript": "I’ll outline the next step and set a check-in—bringing in the LO comes after that."
