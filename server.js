@@ -28,6 +28,11 @@ const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || "";
 // Server bind defaults
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = parseInt(process.env.PORT || "3000", 10);
+
+// OpenAI realtime config defaults
+const OPENAI_REALTIME_URL = process.env.OPENAI_REALTIME_URL || "wss://api.openai.com/v1/realtime";
+const REALTIME_MODEL = process.env.REALTIME_MODEL || "gpt-4o-realtime-preview";
+const TRANSCRIBE_MODEL = process.env.TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe";
 // ---------------- Stub: finalizeAuditRecord ----------------
 // TODO: Replace with actual implementation or import
 function finalizeAuditRecord(state, extra) {
