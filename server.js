@@ -24,6 +24,10 @@ const CALL_STATE = new Map();
 // Twilio env var config (use process.env)
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || "";
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || "";
+
+// Server bind defaults
+const HOST = process.env.HOST || "0.0.0.0";
+const PORT = parseInt(process.env.PORT || "3000", 10);
 // ---------------- Stub: finalizeAuditRecord ----------------
 // TODO: Replace with actual implementation or import
 function finalizeAuditRecord(state, extra) {
