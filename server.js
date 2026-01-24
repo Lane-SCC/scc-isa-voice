@@ -37,6 +37,16 @@ const TRANSCRIBE_MODEL = process.env.TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe
 // Paths / logging defaults
 const SCENARIOS_PATH = process.env.SCENARIOS_PATH || "./scenarios.json";
 const LOG_DIR = process.env.LOG_DIR || "./logs";
+// ---------------- Helper: absUrl ----------------
+function absUrl(req, path) {
+  const p = String(path || "").startsWith("/") ? String(path || "") : `/${String(path || "")}`;
+  const baseFromEnv = String(process.env.PUBLIC_BASE_URL || "").trim();
+  if (baseFromEnv) return `${baseFromEnv.replace(/\/$/, "")}${p}`;
+
+  const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "http").split(",")[0].trim();
+  const host = String(req.headers["x-forwarded-host"] || req.get("host") || "").split(",")[0].trim();
+  return `${proto}://${host}${p}`;
+}
 // ---------------- Stub: finalizeAuditRecord ----------------
 // TODO: Replace with actual implementation or import
 function finalizeAuditRecord(state, extra) {
