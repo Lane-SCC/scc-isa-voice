@@ -52,6 +52,15 @@ function clampInt(val, def, min, max) {
 // ---------------- Express app initialization ----------------
 const express = require("express");
 const app = express();
+app.get("/version", (req, res) => {
+  res.status(200).json({
+    name: "scc-isa-voice",
+    status: "ok",
+    uptimeSec: Math.floor(process.uptime()),
+    realtimeModel: REALTIME_MODEL,
+    transcribeModel: TRANSCRIBE_MODEL,
+  });
+});
 // ---------------- Voice selection (hard lock) ----------------
 const MALE_NAMES = new Set(["steve", "mike", "john", "david", "mark", "tom", "jim", "brian", "chris", "matt"]);
 const FEMALE_NAMES = new Set(["sarah", "jessica", "ashley", "emily", "amy", "kate", "lisa", "rachel", "anna", "mary"]);
