@@ -52,6 +52,8 @@ function clampInt(val, def, min, max) {
 // ---------------- Express app initialization ----------------
 const express = require("express");
 const app = express();
+app.use(express.urlencoded({ extended: false }));
+app.use(express.json());
 app.get("/version", (req, res) => {
   res.status(200).json({
     name: "scc-isa-voice",
@@ -60,6 +62,55 @@ app.get("/version", (req, res) => {
     realtimeModel: REALTIME_MODEL,
     transcribeModel: TRANSCRIBE_MODEL,
   });
+});
+function streamUrlForReq(req) {
+  const httpUrl = absUrl(req, "/twilio");
+  return httpUrl.replace(/^https:\/\//i, "wss://").replace(/^http:\/\//i, "ws://");
+}
+
+function voiceParamsFromReq(req) {
+  const qp = (key, def = "") => (req.body && req.body[key]) || (req.query && req.query[key]) || def;
+  return {
+    callSid: qp("CallSid", ""),
+    from: qp("From", ""),
+    operatorPin: qp("operatorPin", qp("pin", "")),
+    mode: qp("mode", "mcd"),
+    difficulty: qp("difficulty", "Standard"),
+    scenarioId: qp("scenarioId", ""),
+    borrowerName: qp("borrowerName", ""),
+    borrowerGender: qp("borrowerGender", ""),
+    examMode: qp("examMode", "false"),
+  };
+}
+
+function streamTwiml(req) {
+  const params = voiceParamsFromReq(req);
+  const streamUrl = streamUrlForReq(req);
+  const p = (name, value) => `<Parameter name="${xmlEscape(name)}" value="${xmlEscape(String(value || ""))}"/>`;
+  const inner = [
+    `<Connect>`,
+    `<Stream url="${xmlEscape(streamUrl)}">`,
+    p("callSid", params.callSid),
+    p("from", params.from),
+    p("operatorPin", params.operatorPin),
+    p("mode", params.mode),
+    p("difficulty", params.difficulty),
+    p("scenarioId", params.scenarioId),
+    p("borrowerName", params.borrowerName),
+    p("borrowerGender", params.borrowerGender),
+    p("examMode", params.examMode),
+    `</Stream>`,
+    `</Connect>`,
+  ].join("");
+  return twimlResponse(inner);
+}
+
+app.post("/voice", (req, res) => {
+  return res.type("text/xml").status(200).send(streamTwiml(req));
+});
+
+app.post("/connect-prompt", (req, res) => {
+  return res.type("text/xml").status(200).send(streamTwiml(req));
 });
 // ---------------- Voice selection (hard lock) ----------------
 const MALE_NAMES = new Set(["steve", "mike", "john", "david", "mark", "tom", "jim", "brian", "chris", "matt"]);
