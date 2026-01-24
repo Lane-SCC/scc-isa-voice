@@ -34,7 +34,25 @@
         "openers": { "type": "array", "items": { "type": "string" } },
         "pressureLines": { "type": "array", "items": { "type": "string" } },
         "escalationLadder": { "type": "array", "items": { "type": "string" } },
-        "mustHit": { "type": "array", "items": { "type": "string" } },
+        "mustHit": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string" },
+              {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "label": { "type": "string" },
+                  "required": { "type": "boolean" },
+                  "patterns": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["label"],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
         "handoffForbiddenUntil": { "type": "string" },
         "loEscalationScript": { "type": "string" }
       },
@@ -58,4 +76,3 @@
     }
   }
 }
-
